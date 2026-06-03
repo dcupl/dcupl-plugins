@@ -12,6 +12,8 @@
 | `--name <key>` | filename basename, lowercased | Override the model key |
 | `--register` | off | Also writes a `model` + `data` resource pair to `dcupl.lc.json` |
 | `--sample-size <n>` | all rows | Limit rows scanned for type inference |
+| `--key-property <col>` | inferred / prompted | Use this column as the record key — skips key inference and its interactive prompt |
+| `--dry-run` | off | Preview the inferred model (and `--register` resources) without writing anything |
 
 ```bash
 # Minimal
@@ -30,7 +32,7 @@ dcupl generate model --from products.csv --name products --register --sample-siz
 | `"true"` / `"false"` | `boolean` | Exact strings, case-sensitive. |
 | `"2024-01-31"` or `"2024-01-31T10:00:00Z"` | `date` | Strict ISO-8601 only. |
 | Mixed int + float | `float` | Silent promotion; no warning. |
-| `"[\"a\",\"b\"]"` (JSON array string) | `json` | Opaque JSON; no element typing. |
+| `"[\"a\",\"b\"]"` (JSON array *string* in a CSV cell) | `string` | A stringified array is just a string; only a native object/array value infers as `json`. |
 | Genuinely mixed types (e.g. int + string) | `any` | Needs manual resolution. |
 | Ambiguous date (`"01/07/2024"`) | `string` + date-like warning | Promote with `inputFormat`. |
 | Anything else | `string` | Safe default. |
@@ -55,20 +57,12 @@ Two resource entries are appended — one `model` and one `data`:
 {
   "resources": [
     { "url": "${baseUrl}/models/products.dcupl.json", "type": "model" },
-    { "url": "products.csv", "type": "data", "model": "products" }
+    { "url": "${baseUrl}/data/products.csv", "type": "data", "model": "products" }
   ]
 }
 ```
 
-The `url` of the data resource is the raw `--from` path as passed. The full data-resource shape (part of `AppLoaderConfiguration`'s Resource union — there is no standalone `DataResource` schema; see `dcupl schemas get AppLoaderConfiguration --example`) also accepts `options.keyProperty`, `options.autoGenerateKey`, and `options.csvParserOptions` (`delimiter`, `quoteChar`, `escapeChar`, `commentChar`).
-
-> ⚠ **Always rewrite data URLs to `${baseUrl}/...` after `--register`.** The generator currently writes the raw path it was passed (e.g. `"url": "dcupl/data/articles.csv"`) — model resources get `${baseUrl}/models/...` correctly, but data resources do not. The unprefixed path then fails under `--auto-serve` with `InvalidResource` / `Failed to parse URL from dcupl/data/...` (visible in `$DcuplErrorTrackingErrors`), and the loader silently reports `data: 0 resources processed` while the build still looks green. Fix by editing `dcupl.lc.json` so each data resource reads:
->
-> ```json
-> { "type": "data", "model": "articles", "url": "${baseUrl}/data/articles.csv" }
-> ```
->
-> Re-run `dcupl app create --load` — `processed` should now report `data: N` instead of `data: 0`.
+`--register` appends a `model` resource (`${baseUrl}/models/<file>`) and a `data` resource (`${baseUrl}/data/<basename>`), both correctly prefixed. The full data-resource shape (part of `AppLoaderConfiguration`'s Resource union — there is no standalone `DataResource` schema; see `dcupl schemas get AppLoaderConfiguration --example`) also accepts `options.keyProperty`, `options.autoGenerateKey`, and `options.csvParserOptions` (`delimiter`, `quoteChar`, `escapeChar`, `commentChar`).
 
 ⚠ Only set `keyProperty` to a column you have verified is unique — collisions overwrite rows silently with no error. See "Keying data resources" in `SKILL.md`.
 
@@ -103,21 +97,35 @@ A simple `Reference` joins on the local column whose value holds the foreign key
 
 A `Reference` has no `property` field; the `key` *is* the local column. Confusion with `model` (the remote target) is the most common mistake.
 
-### Rule 2 — Reference key types must match across the join
+### Rule 2 — Reference keys are string-coerced at join time
 
-The resolver does not coerce. If `Vendor.key` is `int` and `Article.vendorId` is `string`, every join fails with `RemoteReferenceKeyNotFound` — even on rows where the values look identical.
+The resolver `String()`-coerces both the FK value and the remote keys at join time, so a numeric-string FK (e.g. `"65"`) resolves fine against an `int`-keyed model (key `65`). Mismatched *declared types* alone do not break the join. A `RemoteReferenceKeyNotFound` (carrying `meta.remoteModel` / `meta.remoteKey`) means the key genuinely doesn't exist — almost always because the two sides have different *string representations*: zero-padding, `"65.0"` vs `65`, or stray whitespace.
 
-Fix at the source by pinning both columns to the same type in their model definitions, or transform the data before load. After fixing, re-run the `$DcuplErrorTrackingErrors` query from [Validate a workspace](../SKILL.md#validate-a-workspace) — the errors should disappear.
+Fix at the source by normalizing the key's string form on both sides in their model definitions, or transform the data before load. After fixing, re-run the `$DcuplErrorTrackingErrors` query from [Validate a workspace](../SKILL.md#validate-a-workspace) — the errors should disappear.
 
-> **Heads up — mixed CSV + JSON sources.** When the same FK appears in a CSV on one side and a JSON file on the other, types diverge silently: `dcupl generate model` infers numeric-looking CSV columns as `int`, while JSON FKs are usually stringly typed (`"customerId": "65"`). The join then fails silently. **When sources mix CSV and JSON for the same FK, normalize both sides to `string` early** — pin both `key` and the local FK column to `type: "string"` in their model definitions before loading. Don't trust the generator's per-file inference here; cross-file FK consistency is on you.
+> **Heads up — mixed CSV + JSON sources.** When the same FK appears in a CSV on one side and a JSON file on the other, the values can take different string forms: `dcupl generate model` infers numeric-looking CSV columns as `int`, while JSON FKs are often stringly typed (`"customerId": "65"`). Coercion handles plain `int` vs numeric-string, but it won't paper over `"65.0"` vs `65` or padded/whitespaced variants. **Normalize keys early** — settle on one consistent string representation for the FK across sources before loading. Don't trust the generator's per-file inference for cross-file FK consistency; that's on you.
 
-### Rule 3 — `derive` is for values, not relationships
+### Rule 3 — `derive` is for hopping across an existing relationship, not declaring one
 
-`derive: { localReference, remoteReference }` does **not** declare a relationship. It *pulls a value across an existing relationship* — the local model must already have a Reference named `localReference`, and the foreign model must already have a Reference (or attribute) named `remoteReference`.
+`derive` does **not** declare a relationship. It *reaches across an existing one* — the local model must already have a Reference named `localReference`. There are two distinct shapes, and they use **different remote field names** (easy to get wrong):
+
+**Property `derive`** — pulls a scalar VALUE across the existing Reference onto a property. Uses **`remoteProperty`** (plus an optional `separator`):
+
+```json
+// Article already has a Reference `vendorId` → Vendor.
+// This copies Vendor's companyName onto Article as a plain property.
+{
+  "key": "vendorName",
+  "type": "string",
+  "derive": { "localReference": "vendorId", "remoteProperty": "companyName" }
+}
+```
+
+**Reference `derive`** — derives a REFERENCE across the existing Reference. Uses **`remoteReference`**:
 
 ```json
 // OrderLine already has a Reference to Article; Article has a Reference to Vendor.
-// This pulls Vendor onto OrderLine without explicitly hopping each query.
+// This pulls the Vendor reference onto OrderLine without explicitly hopping each query.
 {
   "key": "vendor",
   "type": "singleValued",
@@ -125,6 +133,8 @@ Fix at the source by pinning both columns to the same type in their model defini
   "derive": { "localReference": "article", "remoteReference": "vendor" }
 }
 ```
+
+Properties use **`remoteProperty`**; references use **`remoteReference`**. Swapping them is a common silent mistake.
 
 Using `derive` to *create* a relationship (e.g. with `localReference` set to a raw column name instead of an existing Reference key) produces misleading errors that look like the FK itself is broken.
 

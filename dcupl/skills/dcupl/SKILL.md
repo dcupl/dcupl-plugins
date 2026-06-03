@@ -36,7 +36,7 @@ Two further traps from the old-CLI shape:
 
 ## How to start a daemon — pick your source
 
-`dcupl app create --load` loads a project; the source defaults to **local** inside a workspace. Use `--source` (CLI ≥ 1.3.5) to choose explicitly.
+`dcupl app create --load` loads a project; the source defaults to **local** inside a workspace. Use `--source` to choose explicitly.
 
 | Goal | Where | Command |
 |---|---|---|
@@ -47,7 +47,7 @@ Two further traps from the old-CLI shape:
 | Remote console data | outside a workspace | `dcupl app create --load --source remote --project-id <id> --api-key <key> --json` |
 | Custom URL | anywhere | `dcupl app create --load --source url --base-url <url> --json` |
 
-`--source remote` fills `projectId` from `dcupl.config.json` and `apiKey` from `dcupl.secrets.json` (version defaults to `draft`; override with `--version`). On CLI < 1.3.5 there is no `--source`; pass `--project-id` explicitly for remote.
+`--source remote` fills `projectId` from `dcupl.config.json` and `apiKey` from `dcupl.secrets.json` (version defaults to `draft`; override with `--version`).
 
 ## Routing
 
@@ -57,6 +57,7 @@ Two further traps from the old-CLI shape:
 | Cloud sync — `dcupl files` status/push/pull, per-file ops, version management | `references/cloud-sync.md` |
 | Generating a model from a data file (`dcupl generate model --from`) | `references/model-authoring.md` |
 | Building, testing, or deploying a Workflow v3 (`dcupl workflow validate/test/deploy/undeploy/runners`) | `references/workflows.md` |
+| Reviewing / auditing a workflow file (`*.workflow-v3.json`) — esp. before flagging anything as a leaked secret | `references/workflows.md` — a `dcupl-files` node's `auth.apiKey` is a **reference UUID (identifier), committed deliberately**, not a secret. Don't flag it. |
 | Authoring a model, loader config, or workflow v3 | Stay here — see "Authoring playbook" below. |
 | Validating that a workspace's loader, models, and data load cleanly | Stay here — see "Validate a workspace" below. |
 | Project scaffolding (`init`, `generate`, `serve`) | Stay here — see "Project setup" below. |
@@ -79,7 +80,7 @@ dcupl schemas get <Name> --example   # source plus a curated example (only some 
 dcupl schemas get <Name> --json      # structured for piping
 ```
 
-> ⚠️ `--example` only appends a curated example for a subset of schemas — as of CLI 1.3.4 / `@dcupl/* 2.0.0-beta.5` that's `ModelDefinition`, `AppLoaderConfiguration`, `Property`, and `TemplateV3`. For others (`DcuplCliConfig`, `Reference`, `WorkflowConfigV3`, `WorkflowVariable`) `--example` is a silent no-op that just prints the type/source. Don't rely on it for those.
+> ⚠️ `--example` only appends a curated example for a subset of schemas — as of CLI 1.3.4 / `@dcupl/* 2.0.0-beta.5` that's `ModelDefinition`, `AppLoaderConfiguration`, `TemplateV3`, and `WorkflowConfigV3`. For others (`DcuplCliConfig`, `Property`, `Reference`, `WorkflowVariable`) `--example` is a silent no-op that just prints the type/source. Don't rely on it for those.
 
 Schemas come from the project's installed `@dcupl/*` packages, so the output reflects the version actually in use. Confirm the live version with `dcupl version` if you suspect a mismatch.
 
@@ -166,7 +167,7 @@ Notes:
 - **`app create` has more knobs than shown here.** This recipe uses `--load`, `--app-key`, `--auto-serve`, `--max-memory`, `--json` — `--workspace` and `--lc-json` auto-resolve from `dcupl.config.json` inside a workspace. For other tuning (`--source`, `--clone`, `--cache`, `--logging-level`, `--logging-format`, `--max-body`, `--reference-metadata`, `--analytics`, `--auto-update`, `--quality`), see `dcupl app create --help`.
 - **No `npm install` in the workspace** — the daemon ships its own `@dcupl/*`. `--auto-serve` hosts the workspace files so the loader can fetch them. Error tracking is on by default; nothing to enable.
 - **Auto-spawned serves are ref-counted across daemons.** A serve spawned by `--auto-serve` survives until the *last* daemon using it is destroyed or idle-shuts-down, not when its first owner dies. So a second `dcupl app create --auto-serve` in the same workspace cheaply reuses the existing serve, and the serve cleans itself up once the last daemon goes. Use `dcupl serve list` to see what's running and `dcupl serve stop --port <p>` if you need to terminate one explicitly. A reachable serve hosting a *different* workspace is rejected via a `loaderHash` check and a fresh serve is spawned — so you don't silently attach to the wrong project.
-- **The loader's CSV parser coerces values, and the resulting error type varies — sometimes there is no error at all.** Observed on `@dcupl/* 2.0.0-beta.5`: a non-numeric cell on a **key** column surfaces as `WrongDataType` (with `expected` / `rawValue` / `typeof` in `meta`); a cell `parseInt` can *partially* read (e.g. `"1.2 lbs"` → `1`, `"29.5 inches"` → `29`) is **silently coerced with NO error record** — lossy, watch for it; a column that is entirely non-numeric may null every cell yet emit only a single aggregate `UndefinedAttribute` rather than one error per row. **Don't assume a specific error *type*** — query `$DcuplErrorTrackingErrors` to see what's actually present, and for numeric columns sanity-check the loaded values against the source (a clean error list does not prove the values weren't silently mangled).
+- **The loader's CSV parser coerces values, and the resulting error type varies — sometimes there is no error at all.** Observed on `@dcupl/* 2.0.0-beta.5`: a non-numeric cell on a **key** column surfaces as `WrongDataType` (with `expected` / `rawValue` / `typeof` in `meta`); a cell `parseInt` can *partially* read (e.g. `"1.2 lbs"` → `1`, `"29.5 inches"` → `29`) is **silently coerced with NO error record** — lossy, watch for it (**version-specific**: a post-beta.5 change, dcupl#196, makes this lossy case emit a `WrongDataType` with `meta.lossy` instead — so on newer `@dcupl/*` it *is* reported; confirm against your installed version); a column that is entirely non-numeric may null every cell yet emit only a single aggregate `UndefinedAttribute` rather than one error per row. **Don't assume a specific error *type*** — query `$DcuplErrorTrackingErrors` to see what's actually present, and for numeric columns sanity-check the loaded values against the source (a clean error list does not prove the values weren't silently mangled).
 - **For richer queries against the loaded app** — `fn aggregate` (requires a `--types` argument), `fn groupBy`, filters, sorting, pagination — it's the same daemon and the same `dcupl app` verbs documented in `references/querying.md`. Read that file for the full `fn` verb signatures rather than guessing.
 
 ## Multi-app slices — `applications[].resourceTags` + `--app-key`
@@ -213,7 +214,7 @@ Each slice gets its own daemon (and its own `--app <id>` for downstream commands
   - **`existing`** (`existing console project`) — bootstraps from an existing dcupl console project (prompts for project, pulls files via the sync engine, writes config). Passing `--project-id <id>` skips the starter prompt and assumes this flow.
   - By default `dcupl init` creates a new subfolder (`--name <folder>`, or a bare positional: `dcupl init <folder>`).
   - To scaffold **into the current directory** instead, use `dcupl init --here` or `dcupl init .` — useful when a folder already holds data files you want to turn into a workspace. In this mode pre-existing files are never overwritten (an existing `.gitignore` is kept as-is), and it refuses if the directory already contains a `dcupl.config.json`. **Prefer `--starter empty` with `--here`** — `minimal` would drop sample files the user then has to delete.
-- `dcupl generate <type>` scaffolds one of (exact choices, CLI 1.3.4): `model`, `script`, `transformer`, `operator`, `typescript`, `json-schema`, `test-setup`, `test`, `test-config`. (Note: it's `typescript`/`json-schema`, NOT `type`/`schema`. `generate model --from <data file>` infers a model from CSV/JSON — see `references/model-authoring.md`.) **Caveat:** several `generate` subcommands are interactive and crash with a raw `ExitPromptError` stack trace in non-TTY/agent contexts (e.g. `generate test` has a prompt with no backing flag); and `--json` is currently ignored by `generate`, `init`, and `config get` — they still print human output.
+- `dcupl generate <type>` scaffolds one of (exact choices, CLI 1.3.4): `model`, `script`, `transformer`, `operator`, `typescript`, `json-schema`, `test-setup`, `test`, `test-config`. (Note: it's `typescript`/`json-schema`, NOT `type`/`schema`. `generate model --from <data file>` infers a model from CSV/JSON — see `references/model-authoring.md`.) **Caveat:** several `generate` subcommands are interactive and crash with a raw `ExitPromptError` stack trace in non-TTY/agent contexts (e.g. `generate test` has a prompt with no backing flag); and `--json` is currently ignored by `generate` and `config get` — they still print human output.
 - `dcupl serve` runs a local dev server (NestJS + Express, default port 8083). It is a managed resource: list every running serve (manual or `--auto-serve`-spawned) with `dcupl serve list`, and stop one with `dcupl serve stop --port <p>`. `dcupl app list` also shows which serve each daemon is talking to (SERVE column).
 
 For exact options, prefer `dcupl <command> --help` over guessing.
@@ -242,7 +243,7 @@ The error taxonomy lives in the SDK at `@dcupl/common` → `QualityAnalyzer` (`p
 
 - **Model errors** (`type: 'model'`)
   - groups: `ReferenceDataError`, `PropertyDataError`, `DataContainerError`, `ModelDefinitionError`
-  - types: `UndefinedAttribute`, `InvalidValidator`, `UndefinedValue`, `NullValue`, `WrongDataType`, `NonUniqueKey`, `MissingModel`, `MissingProperty`, `MissingReference`, `UnknownExpressionVariable`, `RemoteReferenceKeyNotFound`, `InvalidModelDefinition`
+  - types: `UndefinedAttribute`, `InvalidValidator`, `UndefinedValue`, `NullValue`, `WrongDataType`, `NonUniqueKey`, `MissingModel`, `MissingProperty`, `MissingReference`, `UnknownExpressionVariable`, `RemoteReferenceKeyNotFound`, `InvalidModelDefinition`, `UnknownColumn` (a CSV column present in the data but not declared on the model; its values are silently dropped)
 - **Loader errors** (`type: 'loader'`)
   - groups: `LoaderConfigError`, `ResourceError`
   - types: `InvalidConfig`, `InvalidResource`

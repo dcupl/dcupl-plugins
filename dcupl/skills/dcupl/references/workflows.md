@@ -42,7 +42,7 @@ To see the discriminated-union of all node shapes in one place: `dcupl schemas g
 
 Every step receives an array of **items**, each `{ json: {...} }`, and emits the same shape on an output port. Edges wire one node's output port to the next node's input port (usually `main`). You reach incoming data two ways:
 
-- **Inside a `script` node:** `$json.first()` returns the first input item's `json`; `items` is the full array (`items[0].json`, …).
+- **Inside a `script` node:** the input is exposed through `$json` — `$json.first()` is the first input item's `json`, `$json.last()` the last, `$json.at(i)` the i-th (see fan-in below). `$json` exposes only `first` / `last` / `at` / `fromPort` — there is **no** global `items` array and **no** `$json.all()` (both are `undefined`; verified on `@dcupl/* 2.0.0-beta.5`).
 - **Inside config string fields** (`request.url`, `dcupl-files` path/content, …): template expressions, evaluated against the first input item:
   - `{{$json.field}}` — one field of the incoming json (coerced to string)
   - `{{$json}}` — the entire incoming json, stringified
@@ -51,18 +51,35 @@ Every step receives an array of **items**, each `{ json: {...} }`, and emits the
 
 A node's output json becomes the next node's `{{$json}}`. To pass a value downstream, `return` it from a script under a known key, then reference `{{$json.thatKey}}`.
 
+#### Each node sees only its immediate predecessor — fan in to combine
+
+Output does **not** accumulate down the chain. A node reads only what its incoming edge(s) deliver — there is no way to reach back to an earlier node (no `$node`, no `$('name')`, no merged history). Two consequences to plan around:
+
+- **Some step nodes replace the json wholesale.** A `dcupl-files` node emits `{ files: [...], ok }` and drops every upstream key — so a `report` your cleaning script built two nodes back is *gone* by the time a later node runs. (Verified: a script returning `{csv, report}` followed by a `dcupl-files` write yields just `{files, ok}` downstream.)
+- **To combine outputs from non-adjacent nodes, fan in.** Wire an edge from *each* source node into the same target node. The target then receives an ordered multi-input collection — `$json.at(0)`, `$json.at(1)`, … in **`edges[]` declaration order** (also `.first()` / `.last()`). Since the order is positional, it's more robust to pick each input **by shape** than by index:
+
+```js
+// response node fed by BOTH the dcupl-files write node AND the cleaning script
+const a = $json.at(0), b = $json.at(1);
+const write  = (a && a.files)  ? a : b;   // the write output  { files, ok }
+const report = (a && a.report) ? a : b;   // the script's      { report, ... }
+return { status: 200, body: { ok: write.ok, written: write.files, report: report.report } };
+```
+
+Fan-in is the **only** way to surface a value (a report, a row count, the original request) past a node that rewrites the json — there is no global accumulator to fall back on.
+
 ### The `script` node sandbox
 
 Script runs in an isolated VM — not plain Node. The available globals are a curated set:
 
-- **I/O:** `$json.first()`, `items`; `return value` → `main` port; `throw new Error(...)` → `error` port; `return _output.route({ portA: [...], portB: [...] })` for explicit multi-port routing.
+- **I/O:** `$json.first()` / `$json.last()` / `$json.at(i)` (and `$items()` for the full input array); `return value` → `main` port; `throw new Error(...)` → `error` port; `return _output.route({ portA: [...], portB: [...] })` for explicit multi-port routing.
 - **Helpers are namespaced** (this is the part that surprises people — they are NOT bare functions):
   - `_csv` — `toJSON(csvString)`, `fromJSON(rows, { headers, delimiter })`, `headers(csv)`, `validate(...)`. `toJSON` parses (handles quoting/escaping); `fromJSON` serializes (escapes fields; pass an explicit `headers` array to fix column order or drop columns).
   - `_json` — `distinct`, `groupBy`, `flatten`, `merge`, `pick`, `omit`
   - `_array` — `chunk`, `unique`, `flatten`, `groupBy`, `sortBy`, `sum`, `avg`
   - `_string` — `slugify`, `camelCase`, `snakeCase`, `template`, `toBase64`
-  - `_datetime`, `_output`
-- **Plus:** `console`, `Math`, `Date`, `JSON`, and an SSRF-guarded `fetch`. No filesystem; use file nodes for I/O.
+  - `_datetime`, `_output`, `_object`, `_xml` — also available. (The `_http` and `_crypto` namespaces exist but are **blocked** — they throw on use.)
+- **Plus:** `console` (note: `console.log` output is only captured when the run is triggered with `?dataTrace=true` — on a normal run it's a no-op), `Math`, `Date`, `JSON`. **HTTP is blocked inside script nodes** (no `fetch`; `_http.*` throws) — to make an outbound HTTP call use a `request` node. No filesystem; use file nodes for I/O.
 
 > ⚠️ **There is no bare `csvToJson` / `jsonToCsv`** — calling them throws `ReferenceError: csvToJson is not defined`. Use `_csv.toJSON` / `_csv.fromJSON`. (You may find bare names in the runner source under `runner-instance-api/workers` — that's a *different*, non-v3 path. The live v3 node executor injects the `_`-namespaced helpers from `libs/process-isolation`. Trust the namespaced ones.)
 
@@ -82,7 +99,16 @@ Config (per `dcupl schemas get DcuplFilesStepConfig`) is `{ auth: { apiKey }, ve
 ```
 So the content is at `$json.first().files[0].data` in the next script. A CSV file comes back as the raw CSV string → `_csv.toJSON(data)`. Be defensive (handle string vs already-parsed).
 
-**Write**: a `write` entry's `content` is a string, usually templated from the prior script: `"content": "{{$json.csv}}"`. Most reliable pattern: build the exact output string in the script (`_csv.fromJSON(...)` or `JSON.stringify(...)`) and write that string — don't rely on the node to serialize an object for you. Write emits the same `{ files: [...], ok }` shape, so a downstream `response-script` can report `$json.first().files`.
+**Write**: a `write` entry's `content` is a string, usually templated from the prior script: `"content": "{{$json.csv}}"`. Most reliable pattern: build the exact output string in the script (`_csv.fromJSON(...)` or `JSON.stringify(...)`) and write that string — don't rely on the node to serialize an object for you. Each `write` also takes an optional `type` hint (`auto` | `json` | `csv` | `text`). Write emits the same `{ files: [...], ok }` shape, so a downstream `response-script` can report `$json.first().files`.
+
+**Multiple files per node.** `files[]` is an array, so a single `dcupl-files` node can perform several ops at once — e.g. emit both a CSV and a JSON variant from one script's output. Have the script `return` one key per file and template each into its own entry:
+```json
+"files": [
+  { "action": "write", "path": "data/articles.cleaned.csv",  "type": "csv",  "content": "{{$json.csv}}" },
+  { "action": "write", "path": "data/articles.cleaned.json", "type": "json", "content": "{{$json.json}}" }
+]
+```
+The node's output `files[]` then has one `{ action, path, ok, status }` entry per write. (The same applies to batching reads, deletes, moves, and copies in one node.)
 
 ### Worked skeleton — read a CSV, transform, write a variant
 
@@ -93,6 +119,27 @@ trigger-request → dcupl-files(read) → script(transform) → dcupl-files(writ
 - **script:** `const raw = $json.first().files[0].data; const rows = _csv.toJSON(raw); /* …transform… */ return { csv: _csv.fromJSON(rows, { headers }) };`
 - **write:** `{ "action": "write", "path": "data/articles.cleaned.csv", "content": "{{$json.csv}}" }`
 - **response:** `return { status: 200, body: { ok: $json.first().ok, written: $json.first().files } };`
+
+### Canvas annotations — `ui.notes[]`
+
+A `TemplateV3` can carry sticky notes in `ui.notes[]` (sibling of `ui.positions`, the node-position map). These are **editor-only annotations** — no runtime effect — but useful for documenting a workflow inline on the canvas. Each note:
+
+```json
+"ui": {
+  "positions": { "trigger": { "x": 100, "y": 100 } },
+  "notes": [
+    {
+      "id": "note-overview",
+      "position": { "x": 100, "y": 260 },
+      "size": { "width": 1400, "height": 170 },
+      "content": "Plain-text note body, \\n for line breaks.",
+      "color": "yellow"
+    }
+  ]
+}
+```
+
+`color` is one of `yellow | blue | green | pink | gray | purple`. They survive `deploy` (the runner echoes them back), so **preserve `ui.notes` when round-tripping a template** you read with `dcupl files read`. Confirm the exact shape any time with `dcupl schemas get TemplateV3`.
 
 ---
 
@@ -164,12 +211,14 @@ dcupl workflow test workflows/my-workflow.workflow-v3.json \
 
 `--node` routes to the console-api test-node endpoint, running just that node against the provided input without executing the full workflow.
 
-#### Supply a trigger key (when workflow has multiple triggers):
+#### Authenticate against an auth-protected trigger:
+
+Use `--trigger-key <apiKey>` to pass the api-key the runner requires when the trigger is auth-protected. It is the credential sent to authenticate against that trigger — not a selector among triggers.
 
 ```bash
 dcupl workflow test workflows/my-workflow.workflow-v3.json \
   --runner <devRunnerUid> \
-  --trigger-key <k>
+  --trigger-key <apiKey>
 ```
 
 ### 6. Deploy to production

@@ -32,6 +32,8 @@ Cloud-sync commands need three pieces of config split across two files at the pr
 }
 ```
 
+> The CLI sends this key as a `?apikey=<key>` **query param** on every console/files API request (not an `Authorization` header). A `401`/`403` from a cloud-sync command therefore means the key is wrong, expired, or unset — not a header problem.
+
 ### `dcupl config set` — create or update credentials
 
 ```bash
@@ -54,7 +56,8 @@ Diagnostic command — runs even if files don't exist (shows `(unset)`). Prints 
 
 ### Error messages
 
-The auth precondition fires before any cloud sync command and distinguishes the two failure modes:
+The auth precondition fires before any cloud sync command and distinguishes the three failure modes:
+- **`dcupl.config.json not found. Run 'dcupl config set' to create it.`** — config file absent (checked first).
 - **`Missing dcupl.secrets.json. Run 'dcupl config set' to create it.`** — file absent.
 - **`apiKey missing in dcupl.secrets.json. Run 'dcupl config set --api-key <key>' or 'dcupl config set' to set it.`** — file present, `apiKey` empty or absent.
 
@@ -72,9 +75,7 @@ This means after a `dcupl files pull --version staging`, subsequent commands (`f
 
 Files commands print human-readable output by default — colorized status lines for mutations (e.g. `✓ Copied a.json → b.json  (version: draft)`), table-like summaries for `status`/`push`/`pull`, plain text for `read`, a flat sorted path list for `list`. Pass `--json` for machine-parseable output — match the same rule as `dcupl app`: omit `--json` when eyeballing in a terminal, add it when piping or programmatically parsing. Every `files` subcommand honors the flag.
 
-`files list` is *documented* to default to a flat sorted path list (one per line, pipe-friendly), with `--tree` for a nested directory view.
-
-> ⚠️ **Bug (CLI 1.3.4):** the human-readable `files list` output — both the default and `--tree` — currently throws `Error: paths is not iterable` and exits 1. **Only `dcupl files list --json` works.** Always pass `--json` to `files list` until this is fixed. (Other `files` subcommands print human output fine.)
+`files list` defaults to a flat sorted path list (one per line, pipe-friendly), with `--tree` for a nested directory view, and `--json` for machine output.
 
 ## Flag convention
 
@@ -108,8 +109,8 @@ dcupl files push --path models/ --path data/products.csv   # scope to subset
 **Key flags:**
 
 - `--version <id>` — target version; defaults to HEAD then `'draft'`.
-- `--strict` — opt into deletions. Default is **additive** (never deletes). `--strict` combined with `--path` confines deletion to that scope. A `--strict` run prompts before deleting; pass `--yes` to skip (same semantics as the other destructive ops — see **Destructive remote ops** above). Non-TTY without `--yes` fails fast with `NON_TTY_UNCONFIRMED`.
-- `--force` — resolve all conflicts in one direction: `push --force` uploads local over server, `pull --force` overwrites local with server, and `pull --force` also overrides the dirty-workspace version-switch refusal. **Caveat (CLI 1.3.4):** `pull --force` only acts on files the diff classifies as *downloads* — it will NOT revert a file you edited locally (that diff is classified as an "upload"/"local changed"), reporting "Nothing to pull — already up to date" and leaving your edit in place. To discard a local edit, delete the file locally first and then `pull`, or fetch it with `files read --json`.
+- `--strict` — opt into deletions. Default is **additive** (never deletes). `--strict` combined with `--path` confines deletion to that scope. A `--strict` run prompts before deleting; pass `--yes` to skip (same semantics as the other destructive ops — see **Destructive remote ops** above). For `push --strict` (and delete/move/versions), non-TTY without `--yes` fails fast with `NON_TTY_UNCONFIRMED`. Note `pull --strict` currently lacks that guard — it falls through to an interactive prompt and does **not** emit `NON_TTY_UNCONFIRMED` — so always pass `--yes` for non-interactive pull deletions.
+- `--force` — resolve all conflicts in one direction: `push --force` uploads local over server, `pull --force` overwrites local with server, and `pull --force` also overrides the dirty-workspace version-switch refusal.
 - `--path <glob>` — repeatable. Restricts the operation to a subset of files/folders/globs relative to `baseFolder`. Works on all three of `status`, `push`, and `pull` — so `dcupl files status --path models/` previews exactly the scope a `push --path models/` would transfer. Composes with the config-level `filesUpload.include` / `filesUpload.exclude` rules. Use it when you want to sync only `models/`, only one file, etc.
 - `--json` — JSON output (default is human-readable).
 

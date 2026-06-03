@@ -196,9 +196,9 @@ For workspace- or console-loaded apps, the `loaders` namespace lets you swap or 
 
 ```bash
 dcupl app loaders list                                  # what loaders are attached
-dcupl app loaders add --url <url>                       # add a remote loader
-dcupl app loaders process --app-key catalog --env prod  # re-resolve with different slice/env/tag/var
-dcupl app loaders remove --hash <h>                     # detach
+dcupl app loaders add --base-url <url>                  # add a remote loader
+dcupl app loaders process --loader catalog --env prod   # re-resolve with different slice/env/tag/var
+dcupl app loaders remove --loader catalog               # detach
 ```
 
 `loaders process` is the verb to use when the user says "reload from console with a different env" mid-session — much cheaper than destroying the daemon.
@@ -386,17 +386,19 @@ For each referenced item, the result contains `{ key, _dcupl_ref_ }`:
 
 - `_dcupl_ref_: "hit"` — the foreign key resolved to a record on the remote model.
 - `_dcupl_ref_: "miss"` — the foreign key has no matching record (dangling FK).
+- `_dcupl_ref_: "auto_hit"` — an auto-resolved / auto-created remote reference.
 
-This is a great quick visual signal of which joins landed and which dangle, but it means **`query execute` and `query one` do not traverse the relationship** — you don't get the remote record's fields inlined. `--projection` does not change this:
+This is a great quick visual signal of which joins landed and which dangle, but it means **`query execute` and `query one` do not traverse the relationship** — you don't get the remote record's fields inlined. On `query execute`, `--projection` doesn't change this either:
 
 ```bash
 # This LOOKS like it should pull customerId.name into the result, but nested
 # projection on a reference attribute is silently ignored — you still get
-# {key, _dcupl_ref_} for customerId. (In current builds, projection on `query one`
-# may be ignored entirely; don't rely on it filtering top-level fields either.)
-dcupl app query one --model orders --item-key <id> \
+# {key, _dcupl_ref_} for customerId.
+dcupl app query execute --model orders --query '{"operator":"eq","attribute":"orderId","value":"<id>"}' \
   --projection '{"orderId":true,"customerId":{"name":true},"articleIds":{"productName":true}}' --json
 ```
+
+Note that `query one` accepts only `--model` and `--item-key` — it has no `--projection` flag (a passed `--projection` is silently dropped). Projection lives only on `query execute`, so use that verb if you need it.
 
 If you need related fields inlined, you have two options:
 - **Use `fn facets` / `fn groupBy` with a dotted attribute** (see below) — works for the analytical verbs.
@@ -438,8 +440,10 @@ dcupl app destroy --json
 
 ```bash
 dcupl app fn aggregate --model M --attribute X --types distinct --json
-# → { "distinct": { "count": 47, "results": ["a","b",...] } }
+# → {"attribute":"X","types":["distinct"],"distinct":[{"value":"a","count":12},{"value":"b","count":7},...]}
 ```
+
+`distinct` returns an **array of `{value, count}`** — there's no `.distinct.count` total. To get the number of distinct values, read `distinct.length` (or add `count` to `--types`). Under `--include-keys`, each entry also gets a `keys` array.
 
 **"Top 10 most common values in X"**
 
