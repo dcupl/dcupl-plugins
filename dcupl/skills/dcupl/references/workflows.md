@@ -2,7 +2,9 @@
 
 This reference covers the full loop: authoring a `TemplateV3` file, validating it locally and remotely, exercising it against a dev runner, and deploying to production.
 
-> **Schema first.** Before authoring any node, run `dcupl schemas get <NodeTypeConfig>` to read the exact field names. The schema is the source of truth — do not guess field names from memory.
+> **Schema first.** Before authoring any node, run `dcupl schemas get <NodeTypeConfig>` to read the exact field names. The schema is the source of truth for `config` field names — do not guess from memory.
+
+> **Start from a real example, and distrust prose docs.** The fastest, least error-prone way to author a v3 workflow is to copy one already working *in this project*: `dcupl files list`, then `dcupl files read --path workflows/<existing>.workflow-v3.json`. That gives you exact node shapes, a valid `apiKey`, and templating that is known to run on the runner — far more reliable than building from scratch. `dcupl schemas get <X> [--example]` is authoritative for `config` field *names*, but it does NOT describe runtime behavior (how data flows between nodes, the script sandbox API, what a node emits) — for that, read "Authoring node logic" below. Do **not** trust `dcupl-internal/docs/reference/workflow-nodes.md`: it is stale and contradicts the live schema (wrong `dcupl-files` shape, response types that don't exist).
 
 ---
 
@@ -32,7 +34,71 @@ To see the discriminated-union of all node shapes in one place: `dcupl schemas g
 
 ---
 
+## Authoring node logic — data flow, the script sandbox, and `dcupl-files`
+
+`dcupl schemas get` gives you the *shape* of a node's `config`, but not how data moves between nodes at runtime or what a node actually emits. That runtime model is where most authoring time is lost — none of it is in the schemas, so it's documented here.
+
+### How data flows between nodes
+
+Every step receives an array of **items**, each `{ json: {...} }`, and emits the same shape on an output port. Edges wire one node's output port to the next node's input port (usually `main`). You reach incoming data two ways:
+
+- **Inside a `script` node:** `$json.first()` returns the first input item's `json`; `items` is the full array (`items[0].json`, …).
+- **Inside config string fields** (`request.url`, `dcupl-files` path/content, …): template expressions, evaluated against the first input item:
+  - `{{$json.field}}` — one field of the incoming json (coerced to string)
+  - `{{$json}}` — the entire incoming json, stringified
+  - `{{variables.name}}` — a workflow/global variable
+  - `{{request.field}}` — data from the triggering HTTP request
+
+A node's output json becomes the next node's `{{$json}}`. To pass a value downstream, `return` it from a script under a known key, then reference `{{$json.thatKey}}`.
+
+### The `script` node sandbox
+
+Script runs in an isolated VM — not plain Node. The available globals are a curated set:
+
+- **I/O:** `$json.first()`, `items`; `return value` → `main` port; `throw new Error(...)` → `error` port; `return _output.route({ portA: [...], portB: [...] })` for explicit multi-port routing.
+- **Helpers are namespaced** (this is the part that surprises people — they are NOT bare functions):
+  - `_csv` — `toJSON(csvString)`, `fromJSON(rows, { headers, delimiter })`, `headers(csv)`, `validate(...)`. `toJSON` parses (handles quoting/escaping); `fromJSON` serializes (escapes fields; pass an explicit `headers` array to fix column order or drop columns).
+  - `_json` — `distinct`, `groupBy`, `flatten`, `merge`, `pick`, `omit`
+  - `_array` — `chunk`, `unique`, `flatten`, `groupBy`, `sortBy`, `sum`, `avg`
+  - `_string` — `slugify`, `camelCase`, `snakeCase`, `template`, `toBase64`
+  - `_datetime`, `_output`
+- **Plus:** `console`, `Math`, `Date`, `JSON`, and an SSRF-guarded `fetch`. No filesystem; use file nodes for I/O.
+
+> ⚠️ **There is no bare `csvToJson` / `jsonToCsv`** — calling them throws `ReferenceError: csvToJson is not defined`. Use `_csv.toJSON` / `_csv.fromJSON`. (You may find bare names in the runner source under `runner-instance-api/workers` — that's a *different*, non-v3 path. The live v3 node executor injects the `_`-namespaced helpers from `libs/process-isolation`. Trust the namespaced ones.)
+
+When in doubt about a helper, plain JS in the script always works (the data is yours to parse) — but `_csv`/`_json` are more robust (correct escaping) and worth preferring.
+
+### `dcupl-files` — read/write cloud files
+
+Config (per `dcupl schemas get DcuplFilesStepConfig`) is `{ auth: { apiKey }, version, files: [ <entry> ] }`, each entry a discriminated union on `action`: `read | write | delete | move | copy`.
+
+- **Paths are cloud paths** with the workspace `baseFolder` (e.g. `dcupl/`) stripped: local `dcupl/data/x.csv` is `data/x.csv`. Confirm with `dcupl files list`.
+- **`version`** is the cloud version, normally `"draft"`.
+- **`auth.apiKey` is a *project workflow* api-key UUID, NOT your CLI `dcupl.secrets.json` apiKey** (that's a console UUID for the sync API). It is an *identifier* (looks like `I92DyxNTHBRff3TmlEEO`), not the secret credential itself, so it is safe to write into the template and commit. **When authoring a `dcupl-files` node, ask the user for the api-key UUID** and write it straight into `auth.apiKey`. Do **not** ask for, or pass, an actual api-key value — only the UUID. The user can get it from the console's Global Workflow Variables or by reading an existing deployed workflow (`dcupl files read --path workflows/<x>.workflow-v3.json`) and reusing its key. **If the user can't supply a UUID, don't block** — leave `auth.apiKey` empty and tell them to set it on the node in the dcupl console. (A run that 403s on the files node almost always means a wrong/absent UUID.)
+
+**Read output shape** (not in any schema): a read emits one item whose json is
+```json
+{ "files": [ { "action": "read", "path": "...", "ok": true, "status": 200, "data": "<file content>" } ], "ok": true }
+```
+So the content is at `$json.first().files[0].data` in the next script. A CSV file comes back as the raw CSV string → `_csv.toJSON(data)`. Be defensive (handle string vs already-parsed).
+
+**Write**: a `write` entry's `content` is a string, usually templated from the prior script: `"content": "{{$json.csv}}"`. Most reliable pattern: build the exact output string in the script (`_csv.fromJSON(...)` or `JSON.stringify(...)`) and write that string — don't rely on the node to serialize an object for you. Write emits the same `{ files: [...], ok }` shape, so a downstream `response-script` can report `$json.first().files`.
+
+### Worked skeleton — read a CSV, transform, write a variant
+
+```
+trigger-request → dcupl-files(read) → script(transform) → dcupl-files(write) → response-script
+```
+- **read:** `{ "action": "read", "path": "data/articles.csv" }`
+- **script:** `const raw = $json.first().files[0].data; const rows = _csv.toJSON(raw); /* …transform… */ return { csv: _csv.fromJSON(rows, { headers }) };`
+- **write:** `{ "action": "write", "path": "data/articles.cleaned.csv", "content": "{{$json.csv}}" }`
+- **response:** `return { status: 200, body: { ok: $json.first().ok, written: $json.first().files } };`
+
+---
+
 ## Build → validate → test → deploy loop
+
+> **The reliable loop in practice: edit → `deploy` (to a reachable runner) → trigger via `curl`** (see "Debugging a failing run"). `dcupl workflow test` bundles deploy+trigger but is opaque on failure. Two gotchas: (1) a trigger fired in the same breath as `deploy` can still hit the *previous* deployment — the runner's swap lags the command returning, so if a fix seems ignored, re-trigger after a moment or re-deploy before concluding the code is wrong; (2) `deploy`/`test` send your local file, but they do NOT sync it to the console — run `dcupl files push` separately to keep the cloud copy current.
 
 ### 1. Author the workflow file
 
@@ -42,7 +108,9 @@ Start from the canonical `TemplateV3` example:
 dcupl schemas get TemplateV3 --example
 ```
 
-Write the result to `workflows/<key>.workflow-v3.json`. Convention: one file per workflow, filename matches the template `key`. Before authoring each node's `config`, always read the relevant node config schema first (see catalog above).
+Write the result to `workflows/<key>.workflow-v3.json`. Convention: one file per workflow, filename matches the template `key`. Before authoring each node's `config`, read the relevant node config schema (catalog above) and the "Authoring node logic" section for runtime behavior. Better yet, start from a working workflow in the project (`dcupl files read --path workflows/<existing>.workflow-v3.json`) and adapt it.
+
+**`deploy`/`test` read this local file directly** — no push is required for your code to ship — but they don't sync it to the console, so run `dcupl files push` to keep the cloud copy current. Be aware the runner's swap can lag a just-returned `deploy` (see Common mistakes).
 
 ### 2. Validate locally
 
@@ -150,6 +218,33 @@ dcupl workflow test workflows/my-workflow.workflow-v3.json --runner <devRunnerUi
 
 The JSON result includes the full trace as a structured object — easier to parse than terminal output and unambiguous on pass/fail.
 
+> ⚠️ **On failure, the CLI is often opaque.** When a run fails at the runner (bad script, auth, etc.), `dcupl workflow test` frequently prints only `Error: Request failed with status code 500` (or 403) with no per-node detail — the failure happened over HTTP and the CLI doesn't unwrap it. Don't try to debug from that line. Use the direct-trigger technique below.
+
+---
+
+## Debugging a failing run — trigger the runner directly
+
+The CLI is good for validate/deploy but opaque on run failures. To see the **real per-node error**, deploy and then hit the runner URL directly with `?dataTrace=true`:
+
+```bash
+# 1. deploy to a reachable runner (a local one is ideal). deploy ships this local file;
+#    `dcupl files push` only syncs the console copy — it's not required to deploy.
+dcupl workflow deploy workflows/<key>.workflow-v3.json --runner <runnerUid> --yes
+
+# 2. trigger the runner directly — dataTrace surfaces per-node errors
+curl -s -X POST \
+  'http://<runnerUrl>/v3/workflow/<projectId>-<key>/<triggerPath>?dataTrace=true' \
+  -H 'Content-Type: application/json' -d '{}'
+```
+
+URL parts: `<runnerUrl>` from `dcupl workflow runners`; `<projectId>` from `dcupl.config.json`; `<key>` is the template key; `<triggerPath>` is the trigger-request node's `path` **without its leading slash**. A node failure returns exactly what you need:
+
+```json
+{"error":{"message":"csvToJson is not defined","errorType":"ReferenceError","nodeId":"clean"}}
+```
+
+and a success returns your `response-script` body. This **deploy → curl** loop is more reliable and more legible than `dcupl workflow test`, and works against any runner you can reach (including a local `http://localhost:3003`). Add `&async=true` for fire-and-forget.
+
 ---
 
 ## Dev vs production runner — the key distinction
@@ -160,6 +255,8 @@ The JSON result includes the full trace as a structured object — easier to par
 | Production runner | `dcupl workflow deploy` | `deploy` is confirm-gated (`--yes` for CI). Do not point `test` here. |
 
 Always run `dcupl workflow runners` to confirm UIDs before running `test` or `deploy`. There is no "dry-run" or draft state — every `test` is a live deploy on that runner.
+
+This table is about *caution*, not a hard binding: `deploy` works to **any** runner, and deploying to a **dev** runner and then triggering it with `curl` (see "Debugging a failing run") is the recommended iterate loop — more legible than `test`. The rule that still holds firm: never point `test` (or a throwaway `deploy`) at a runner serving production.
 
 ---
 
@@ -183,4 +280,6 @@ See `references/cloud-sync.md` for the full file-sync reference.
 - **Setting fields on `response-status` config.** The config must be `{}`. Status is derived from workflow completion; any fields are ignored or cause a validation error.
 - **Pointing `test` at a production runner.** `test` deploys unconditionally. Use a dedicated dev runner.
 - **Running `test` without `--runner`.** Remote test requires a runner UID — there is no local executor.
-- **Forgetting to push the file before deploying.** `deploy` operates on the file you pass — it does not auto-sync from cloud. Push first if needed, or pass the local file path directly.
+- **A fix that "doesn't take" after `deploy`.** `deploy`/`test` send the local file's content (verified in the CLI), so your edits *do* ship — but the runner's hot-swap can lag the command returning, so a trigger fired immediately after may still hit the previous deployment and reproduce the old error. If a fix seems ignored, re-trigger after a moment or re-deploy before concluding the code is wrong. (Separately, `deploy` does not push to the console — run `dcupl files push` to keep the cloud copy in sync.)
+- **Reaching for bare `csvToJson`/`jsonToCsv` in a script node.** They aren't in the sandbox — use the namespaced `_csv.toJSON` / `_csv.fromJSON` (see "Authoring node logic").
+- **Confusing the two apiKeys.** `dcupl-files` `auth.apiKey` is a project *workflow* key, not the console UUID in `dcupl.secrets.json`. A 403 on a files node almost always means the wrong key.
