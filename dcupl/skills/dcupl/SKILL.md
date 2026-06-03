@@ -123,7 +123,7 @@ A CSV (or JSON/NDJSON) data file can be wired straight into `dcupl.lc.json` as a
 
 `@dcupl/common-internal` exports both a legacy v2 workflow type (`Workflow.Template` namespace, with `trigger[]` and `steps[]` arrays) and the v3 schemas (`WorkflowConfigV3`, `TemplateV3`, with unified `nodes[]` and `edges[]`). **Always author against v3.** Do not produce v2 templates. If the user's existing files look like v2, flag it and ask before extending them.
 
-To **build, validate, test, or deploy** a workflow from the CLI, read `references/workflows.md` — it covers the full author → validate → test → deploy loop with exact commands. Per-node config schemas live in `dcupl schemas` under the group "Workflow Nodes": `dcupl schemas list` to see them all, `dcupl schemas get <NodeTypeConfig> [--example]` to inspect one before authoring a node's `config`.
+To **author, build, validate, test, or deploy** a workflow, read `references/workflows.md`. Beyond the CLI loop it documents the parts schemas don't cover and that are easy to get wrong: how data flows between nodes, the `script` node sandbox (its `_csv`/`_json`/… helpers — note bare `csvToJson` does NOT exist), `dcupl-files` read/write output shapes and the project-workflow `apiKey`, the must-`push`-before-`deploy` rule, and how to debug a failing run by triggering the runner directly. Per-node config schemas live in `dcupl schemas` under the group "Workflow Nodes": `dcupl schemas list`, then `dcupl schemas get <NodeTypeConfig> [--example]` before authoring a node's `config`. **Fastest start: copy a workflow already deployed in the project** via `dcupl files read --path workflows/<x>.workflow-v3.json`.
 
 ## Validate a workspace
 
