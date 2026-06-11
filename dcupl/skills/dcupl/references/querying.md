@@ -92,8 +92,8 @@ The CLI can return a well-formed but wrong answer. Before turning a result into 
 - **Row count plausible?** `fn metadata` `currentSize` should match what you expected from the source file. A surprising count usually means a bad `--key-property` (duplicate keys collapse rows) or a partial ingest.
 - **`avg`/`sum` not 0 or undefined?** That's the numeric-types gotcha — the column is `string`/`any`. Fix the model, then re-run; don't report the 0.
 - **`distinct` count sane?** A distinct count equal to the row count on a column you expected to repeat means values aren't matching — check for stray whitespace or inconsistent casing.
-- **Empty filter result?** Before reporting "zero matches", confirm it isn't a `find` pattern that needed slash-delimiters, or a numeric comparison silently running against a string column.
-- **Group sizes sum to the total?** `fn groupBy` group sizes should add up to `currentSize`. A shortfall means null/empty values in the grouped attribute — worth mentioning.
+- **Empty filter result?** Before reporting "zero matches", confirm it isn't a `find` pattern that needed slash-delimiters, or a numeric comparison silently running against a string column. **Also check the attribute name against `fn metadata`**: a typo'd attribute in a `--query` filter or `fn facets --attribute` returns a silent `[]` with exit 0 — indistinguishable from zero matches (only `fn groupBy`/`fn aggregate` hard-error on unknown attributes, and with a misleading `INTERNAL` code). The same silent `[]` happens when querying a column that was consumed by `keyProperty` — its values live under `key`, not the original column name.
+- **Group/facet sizes sum to the total?** `fn groupBy` group sizes — and `fn facets` counts — should add up to `currentSize`. Both **silently exclude blank/missing values** (there is no `(blank)` bucket), so a shortfall is your only signal of missing data. Quantify it with `{"operator":"isTruthy","attribute":"<attr>","value":false}`.
 
 If a check fails, fix the cause and re-run — don't report a suspect number with a caveat.
 
@@ -167,7 +167,7 @@ Read the user's question, then pick:
 |---|---|---|
 | "What values appear in column X, and how often?" | `fn facets` | `--model M --attribute X [--limit 20]` |
 | "What's the min/max/avg/sum of X?" | `fn aggregate` | `--model M --attribute X --types min,max,avg` |
-| "How does X break down by Y?" | `fn groupBy` | `--model M --attribute Y` (sizes per group). Add `--aggregate price:avg` for per-group stats. |
+| "How does X break down by Y?" | `fn groupBy` | `--model M --attribute Y` (sizes per group). Add `--aggregate price:avg` for per-group stats. **One attribute per call** — for X × Y cross-tabs see "Cross-tabs" under Common patterns. |
 | "How many records match this filter?" | `fn metadata` (with `--query`) or count `query execute` | `--model M --query '{...}'` returns `currentSize` |
 | "Show me records matching this filter, sorted, paginated" | `query execute` | `--model M --query '{...}' --sort price:DESC --limit 10` |
 | "Get a single record by id" | `query one` | `--model M --item-key 123` |
@@ -369,7 +369,7 @@ For most exploratory work, a single condition via `--query` is enough. Use `--qu
 `query execute` accepts:
 
 - `--sort price:DESC,name:ASC` — comma-separated `attr:DIR` pairs (DIR is `ASC` or `DESC`, default `ASC`)
-- `--limit 10` and `--start 20` — pagination
+- `--limit 10` and `--start 20` — pagination. `--start` is a **0-based offset**: records 100–110 of a sorted result = `--start 100 --limit 11`
 - `--projection` — pick which fields to return; three equivalent forms:
   - Object: `--projection '{"id":true,"name":true}'` (use `false` to exclude)
   - Array: `--projection '["id","name"]'`
@@ -403,6 +403,8 @@ Note that `query one` accepts only `--model` and `--item-key` — it has no `--p
 If you need related fields inlined, you have two options:
 - **Use `fn facets` / `fn groupBy` with a dotted attribute** (see below) — works for the analytical verbs.
 - **Hop manually**: `query execute` the local record, take each `key` from the reference, then `query one --model <RemoteModel> --item-key <key>`.
+
+> **Filtering DOES traverse references** — it's only output inlining that doesn't. A `--query` condition can use dotted notation across a singleValued reference: `{"operator":"eq","attribute":"vendorId.country","value":"Austria"}` filters records by their referenced vendor's country. Filtering on the reference attribute itself matches by remote key: `{"operator":"eq","attribute":"vendorId","value":"v-005"}`. Verified on `@dcupl/* 2.0.0-beta.6`.
 
 ### Dotted-reference traversal in `fn facets` and `fn groupBy`
 
@@ -462,6 +464,20 @@ dcupl app fn aggregate --model Product --attribute price --types avg \
   --query '{"operator":"eq","attribute":"category","value":"shoes"}' --json
 # → avg price *of shoes only*
 ```
+
+**Cross-tabs (X × Y) — loop scoped facets; multi-attribute groupBy does NOT exist:**
+
+`fn groupBy` takes exactly one attribute. `--attribute season --attribute year` (and `--attribute season,year`) both fail with a misleading `{"error":"Attribute not found","code":"INTERNAL"}`. Build two-dimensional breakdowns by looping `fn facets --query` over the values of the smaller dimension:
+
+```bash
+# season × year: one scoped facet call per season value
+for s in Summer Fall Winter Spring; do
+  dcupl app fn facets --model Product --attribute year \
+    --query '{"operator":"eq","attribute":"season","value":"'"$s"'"}' --json
+done
+```
+
+Remember each scoped facet excludes blank cells of *both* attributes — reconcile the totals against `currentSize` (see "Sanity-check results").
 
 **"Multiple datasets in one daemon":**
 

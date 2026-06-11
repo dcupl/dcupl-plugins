@@ -66,7 +66,7 @@ The auth precondition fires before any cloud sync command and distinguishes the 
 Most file commands take an optional `--version <id>`. The resolution order is:
 
 1. Explicit `--version` arg, if passed.
-2. The local **HEAD** — the last version this workspace synced against (tracked in `.dcupl/HEAD`).
+2. The local **HEAD** — the last version this workspace synced against (tracked in `.dcupl/sync-state/HEAD`).
 3. Fallback: `'draft'`.
 
 This means after a `dcupl files pull --version staging`, subsequent commands (`files status`/`push`/`pull`, `files read`, `files write`, etc.) default to `staging` until you sync against another version. You generally don't need to pass `--version` repeatedly.
@@ -120,9 +120,9 @@ dcupl files push --path models/ --path data/products.csv   # scope to subset
 
 **Server-side drift.** If the server has lost a file since the last sync (e.g. another collaborator deleted it, the version was wiped, or any out-of-band change), additive `push` re-uploads it from the local workspace — the baseline is treated as a record of what the server *should* still have, not as ground truth. `status` shows the file under uploads with the reason `server diverged from baseline (file missing on server, re-uploading from local)`. Use this to recover from server-side wipes without manually clearing `.dcupl/`. If you instead want to mirror the server-side deletion locally, run `pull --strict` (which prompts before deleting). The symmetric case — a local file you deleted while the server is unchanged — is not auto-restored by additive `pull`; use `pull --strict` if you want server-side state to win.
 
-**Sync state.** Lives under `.dcupl/`:
-- `.dcupl/HEAD` — last version synced against.
-- `.dcupl/baselines/<versionId>.json` — per-version baseline manifest used for 3-way diff.
+**Sync state.** Lives under `.dcupl/sync-state/` (verified on CLI 1.3.4 — there is no `baselines/` directory):
+- `.dcupl/sync-state/HEAD` — last version synced against.
+- `.dcupl/sync-state/<versionId>.json` — per-version baseline manifest used for 3-way diff (e.g. `draft.json`).
 - `.dcupl/.gitignore` — auto-written on first sync so the `.dcupl/` internals don't get committed. Don't touch this manually.
 
 ## Per-file operations

@@ -34,6 +34,28 @@ To see the discriminated-union of all node shapes in one place: `dcupl schemas g
 
 ---
 
+## Runtime limits — design within the envelope BEFORE authoring
+
+Runners enforce hard budgets (sourced from the console `WORKFLOWS_RUNTIME` feature). **Neither local nor remote `validate` checks them** — a workflow can be `valid: true` and still be structurally unable to ever finish. In testing, this single gap caused every run failure (~12 deploy/trigger/trace cycles, 4 redesigns). Defaults observed on a dev runner (2026-06):
+
+| Limit | Default | Meaning |
+|---|---|---|
+| `workflowTimeout` | 10 000 ms | The whole run — and it INCLUDES ~2–3s of process-spawn/serialization overhead, so the real node budget is ~7–8s |
+| `requestTimeout` | 5 000 ms | A single `request` node's fetch |
+| `scriptTimeout` | 500 ms | A single `script` node. isolated-vm is far slower than native Node — a transform that takes 80ms locally can blow this, and the same script can pass one run and fail the next (shared-runner CPU variance) |
+| `workflowWorkers` | 1 | Nodes execute **sequentially** — parallel edges do NOT buy wall-clock time |
+
+The effective values for your project are currently exposed in exactly one place: the `runtime` object embedded in `dcupl workflow deploy --json` output. Check it before designing anything non-trivial.
+
+Design consequences for payloads beyond ~1MB:
+
+- **Parse at the fetch, not in a script.** A `request` node with `autoParse: true` parses CSV/JSON natively inside the request node (outside any script budget). Piping a multi-MB CSV string through `_csv.toJSON` inside a 500ms script budget will not survive.
+- **Cut volume at the source.** E.g. a published Google-Sheet CSV URL accepts a `range` parameter (`…&range=C1:E44447` — header row inclusive) to fetch only the columns/rows you need.
+- **Split big jobs across runs.** Drive one deployment with a trigger-body parameter (mode / range) and trigger it N times, instead of one mega-pipeline. Multi-port routing from a script (`_output.route`) pairs well with this.
+- **Timeout attribution is misleading.** A node killed by the *workflow* clock is still labeled "Node execution timed out", and traces can show a total duration well under the advertised limit (spawn overhead is invisible). When a run dies early, compare trace durations against the table above before blaming the node.
+
+---
+
 ## Authoring node logic — data flow, the script sandbox, and `dcupl-files`
 
 `dcupl schemas get` gives you the *shape* of a node's `config`, but not how data moves between nodes at runtime or what a node actually emits. That runtime model is where most authoring time is lost — none of it is in the schemas, so it's documented here.
@@ -42,12 +64,12 @@ To see the discriminated-union of all node shapes in one place: `dcupl schemas g
 
 Every step receives an array of **items**, each `{ json: {...} }`, and emits the same shape on an output port. Edges wire one node's output port to the next node's input port (usually `main`). You reach incoming data two ways:
 
-- **Inside a `script` node:** the input is exposed through `$json` — `$json.first()` is the first input item's `json`, `$json.last()` the last, `$json.at(i)` the i-th (see fan-in below). `$json` exposes only `first` / `last` / `at` / `fromPort` — there is **no** global `items` array and **no** `$json.all()` (both are `undefined`; verified on `@dcupl/* 2.0.0-beta.5`).
+- **Inside a `script` node:** the input is exposed through `$json` — `$json.first()` is the first input item's `json`, `$json.last()` the last, `$json.at(i)` the i-th (see fan-in below). `$json` exposes only `first` / `last` / `at` / `fromPort` — there is **no** global `items` array and **no** `$json.all()` (both are `undefined`; verified on `@dcupl/* 2.0.0-beta.6` — even though the CLI's own `ScriptStepConfig --example` still shows an `items` global; the example is wrong, dcupl-cli#145).
 - **Inside config string fields** (`request.url`, `dcupl-files` path/content, …): template expressions, evaluated against the first input item:
   - `{{$json.field}}` — one field of the incoming json (coerced to string)
   - `{{$json}}` — the entire incoming json, stringified
   - `{{variables.name}}` — a workflow/global variable
-  - `{{request.field}}` — data from the triggering HTTP request
+  - `{{request.field}}` — a field of the triggering HTTP request **body** (specifically `request.body` — not query params or headers). A missing field does NOT resolve to an empty string; the unresolved value poisons whatever config it's templated into (e.g. produces a 4xx-generating URL). Treat trigger-body fields as required and validate them in an early script node.
 
 A node's output json becomes the next node's `{{$json}}`. To pass a value downstream, `return` it from a script under a known key, then reference `{{$json.thatKey}}`.
 
@@ -84,6 +106,16 @@ Script runs in an isolated VM — not plain Node. The available globals are a cu
 > ⚠️ **There is no bare `csvToJson` / `jsonToCsv`** — calling them throws `ReferenceError: csvToJson is not defined`. Use `_csv.toJSON` / `_csv.fromJSON`. (You may find bare names in the runner source under `runner-instance-api/workers` — that's a *different*, non-v3 path. The live v3 node executor injects the `_`-namespaced helpers from `libs/process-isolation`. Trust the namespaced ones.)
 
 When in doubt about a helper, plain JS in the script always works (the data is yours to parse) — but `_csv`/`_json` are more robust (correct escaping) and worth preferring.
+
+### The `request` node — output shape and `autoParse`
+
+Not in any schema: a `request` node emits one item whose json is
+
+```json
+{ "body": "<parsed-or-raw>", "headers": {}, "statusCode": 200, "statusText": "OK", "contentType": "...", "ok": true, "_meta": {} }
+```
+
+so the payload is at `$json.first().body` in the next node. With `autoParse: true` the node parses the response **natively, outside any script budget**: JSON → objects, CSV → an array of header-keyed row objects. For large CSVs this is the only practical path past the 500ms script limit — see "Runtime limits" above.
 
 ### `dcupl-files` — read/write cloud files
 
@@ -171,9 +203,10 @@ Local validation checks: valid `TemplateV3` shape, node configs match their decl
 
 ```bash
 # Discover available runners first:
-dcupl workflow runners
+dcupl workflow runners list
 
 # Remote validation adds: cycle detection, expression checks, feature-limit checks.
+# (It does NOT check runtime budgets — see "Runtime limits" above.)
 dcupl workflow validate --path workflows/my-workflow.workflow-v3.json --runner <runnerUid>
 ```
 
@@ -182,8 +215,10 @@ dcupl workflow validate --path workflows/my-workflow.workflow-v3.json --runner <
 ### 4. Find runner UIDs
 
 ```bash
-dcupl workflow runners
+dcupl workflow runners list
 ```
+
+> ⚠️ The subcommand is **`runners list`** — bare `dcupl workflow runners` exits 1 on CLI 1.3.4.
 
 Prints a table: `uid`, `runnerKey`, `type`, `url`. Pick a **dev runner** UID for the `test` command and a **production runner** UID for `deploy`. These are different runners — `test` is intentionally destructive (it overwrites the runner's current deployment), so never point it at a production runner.
 
@@ -198,6 +233,8 @@ dcupl workflow test --path workflows/my-workflow.workflow-v3.json --runner <devR
 ```
 
 This validates locally, deploys to the dev runner, then triggers the workflow via the trigger-request node's configured `path` and first `method`. The response and a per-node trace are printed.
+
+> ⚠️ **`test` triggers with an EMPTY request body** — there is no `--body`/`--query` flag. A workflow whose templates read `{{request.field}}` will necessarily 4xx under `test`; exercise parameter-driven workflows with deploy + curl instead (see "Debugging a failing run"). Also: a first-ever `test` against a runner with no prior deployment has been observed to fail with an opaque `WORKFLOW_SWAP_ERROR` (403) — a plain `deploy` of the same file, then re-running `test`, clears it.
 
 #### Single-node test (exercise one node in isolation):
 
@@ -237,7 +274,7 @@ dcupl workflow deploy --path workflows/my-workflow.workflow-v3.json --runner <pr
 
 ```bash
 # Get deployed workflow UIDs:
-dcupl workflow runners   # to recall which runner hosts which workflow
+dcupl workflow list   # deployed workflows + their UIDs (NOT `runners` — that lists runners)
 
 # Undeploy by deployed workflow UID:
 dcupl workflow undeploy --id <workflowUid>
@@ -271,7 +308,21 @@ The JSON result includes the full trace as a structured object — easier to par
 
 ---
 
-## Debugging a failing run — trigger the runner directly
+## Debugging a failing run
+
+**Rule zero: never trust the trigger/`test` response status.** A run that fails (e.g. hits the workflow timeout) can still return `{"status":"completed","data":[]}` to the caller while `history`/`trace` correctly record `failed` (dcupl-workflow-runner#82). An empty `data` array on a "completed" run is the tell. Cross-check `history` after **every** run before believing it. Related: a multi-write `dcupl-files` node is non-atomic — on a timeout, earlier writes may have committed server-side while later ones never ran, with `failedNodes: 0` in the metadata (dcupl-workflow-runner#84). Verify outputs with `dcupl files list`/`read`, not the run report.
+
+### The primary tools: `history` + `trace`
+
+```bash
+dcupl workflow list                                      # deployed workflows + UIDs
+dcupl workflow history --id <workflowUid> --json         # run-level: executionId, status, duration, error per run
+dcupl workflow trace --id <workflowUid> --run <executionId> --json   # per-node: status, duration, error
+```
+
+`trace` is the workhorse: per-node status/duration/error, and for runs triggered with `?dataTrace=true` it also carries evaluated node configs, truncated payload samples, and script `console.log` output. The loop in practice: `deploy` → trigger via curl (below) → `history` for the run status + executionId → `trace` for the failing node. (`dcupl workflow get/template/status` exist too — see `dcupl workflow --help`.)
+
+### Triggering the runner directly
 
 The CLI is good for validate/deploy but opaque on run failures. To see the **real per-node error**, deploy and then hit the runner URL directly with `?dataTrace=true`:
 
@@ -286,7 +337,7 @@ curl -s -X POST \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-URL parts: `<runnerUrl>` from `dcupl workflow runners`; `<projectId>` from `dcupl.config.json`; `<key>` is the template key; `<triggerPath>` is the trigger-request node's `path` **without its leading slash**. A node failure returns exactly what you need:
+URL parts: `<runnerUrl>` from `dcupl workflow runners list`; `<projectId>` from `dcupl.config.json`; `<key>` is the template key; `<triggerPath>` is the trigger-request node's `path` **without its leading slash**. A node failure returns exactly what you need:
 
 ```json
 {"error":{"message":"csvToJson is not defined","errorType":"ReferenceError","nodeId":"clean"}}
@@ -303,7 +354,7 @@ and a success returns your `response-script` body. This **deploy → curl** loop
 | Dev runner | `dcupl workflow test` | `test` overwrites the runner's current deployment on every run. Treat as ephemeral. |
 | Production runner | `dcupl workflow deploy` | `deploy` is confirm-gated (`--yes` for CI). Do not point `test` here. |
 
-Always run `dcupl workflow runners` to confirm UIDs before running `test` or `deploy`. There is no "dry-run" or draft state — every `test` is a live deploy on that runner.
+Always run `dcupl workflow runners list` to confirm UIDs before running `test` or `deploy`. There is no "dry-run" or draft state — every `test` is a live deploy on that runner.
 
 This table is about *caution*, not a hard binding: `deploy` works to **any** runner, and deploying to a **dev** runner and then triggering it with `curl` (see "Debugging a failing run") is the recommended iterate loop — more legible than `test`. The rule that still holds firm: never point `test` (or a throwaway `deploy`) at a runner serving production.
 
