@@ -101,7 +101,7 @@ A `Reference` has no `property` field; the `key` *is* the local column. Confusio
 
 The resolver `String()`-coerces both the FK value and the remote keys at join time, so a numeric-string FK (e.g. `"65"`) resolves fine against an `int`-keyed model (key `65`). Mismatched *declared types* alone do not break the join. A `RemoteReferenceKeyNotFound` (carrying `meta.remoteModel` / `meta.remoteKey`) means the key genuinely doesn't exist — almost always because the two sides have different *string representations*: zero-padding, `"65.0"` vs `65`, or stray whitespace.
 
-Fix at the source by normalizing the key's string form on both sides in their model definitions, or transform the data before load. After fixing, re-run the `$DcuplErrorTrackingErrors` query from [Validate a workspace](../SKILL.md#validate-a-workspace) — the errors should disappear.
+Fix at the source by normalizing the key's string form on both sides in their model definitions, or transform the data before load. After fixing, re-run [`dcupl validate`](../SKILL.md#validate-a-workspace) — the errors should disappear.
 
 > **Heads up — mixed CSV + JSON sources.** When the same FK appears in a CSV on one side and a JSON file on the other, the values can take different string forms: `dcupl generate model` infers numeric-looking CSV columns as `int`, while JSON FKs are often stringly typed (`"customerId": "65"`). Coercion handles plain `int` vs numeric-string, but it won't paper over `"65.0"` vs `65` or padded/whitespaced variants. **Normalize keys early** — settle on one consistent string representation for the FK across sources before loading. Don't trust the generator's per-file inference for cross-file FK consistency; that's on you.
 
@@ -198,4 +198,4 @@ Leaving both entries in place does not error, but it is the canonical "looks wei
 
 ### Sanity-check after editing
 
-After adding or changing references, re-validate the workspace — [Validate a workspace](../SKILL.md#validate-a-workspace) loads the loader config in a daemon and surfaces `RemoteReferenceKeyNotFound`, `MissingReference`, and friends from `$DcuplErrorTrackingErrors`. A green result is the only proof the references resolve.
+After adding or changing references, re-validate the workspace — [`dcupl validate`](../SKILL.md#validate-a-workspace) loads the loader config in a daemon and surfaces `RemoteReferenceKeyNotFound`, `MissingReference`, and friends (as `ReferenceDataError` warnings). A green result is the only proof the references resolve.
