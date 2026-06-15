@@ -194,7 +194,7 @@ Write the result to `workflows/<key>.workflow-v3.json`. Convention: one file per
 ### 2. Validate locally
 
 ```bash
-dcupl workflow validate --path workflows/my-workflow.workflow-v3.json
+dcupl workflow validate --file workflows/my-workflow.workflow-v3.json
 ```
 
 Local validation checks: valid `TemplateV3` shape, node configs match their declared types, no structural errors. No network required, no credentials needed.
@@ -207,7 +207,7 @@ dcupl workflow runners list
 
 # Remote validation adds: cycle detection, expression checks, feature-limit checks.
 # (It does NOT check runtime budgets — see "Runtime limits" above.)
-dcupl workflow validate --path workflows/my-workflow.workflow-v3.json --runner <runnerUid>
+dcupl workflow validate --file workflows/my-workflow.workflow-v3.json --runner <runnerUid>
 ```
 
 `--local-only` forces local-only even when a runner is given (useful in CI steps that can't reach the runner).
@@ -229,7 +229,7 @@ Prints a table: `uid`, `runnerKey`, `type`, `url`. Pick a **dev runner** UID for
 #### Full-run (exercise the trigger-request path):
 
 ```bash
-dcupl workflow test --path workflows/my-workflow.workflow-v3.json --runner <devRunnerUid>
+dcupl workflow test --file workflows/my-workflow.workflow-v3.json --runner <devRunnerUid>
 ```
 
 This validates locally, deploys to the dev runner, then triggers the workflow via the trigger-request node's configured `path` and first `method`. The response and a per-node trace are printed.
@@ -239,7 +239,7 @@ This validates locally, deploys to the dev runner, then triggers the workflow vi
 #### Single-node test (exercise one node in isolation):
 
 ```bash
-dcupl workflow test --path workflows/my-workflow.workflow-v3.json \
+dcupl workflow test --file workflows/my-workflow.workflow-v3.json \
   --runner <devRunnerUid> \
   --node <nodeId> \
   --input input.json        # payload for the node under test
@@ -253,7 +253,7 @@ dcupl workflow test --path workflows/my-workflow.workflow-v3.json \
 Use `--trigger-key <apiKey>` to pass the api-key the runner requires when the trigger is auth-protected. It is the credential sent to authenticate against that trigger — not a selector among triggers.
 
 ```bash
-dcupl workflow test --path workflows/my-workflow.workflow-v3.json \
+dcupl workflow test --file workflows/my-workflow.workflow-v3.json \
   --runner <devRunnerUid> \
   --trigger-key <apiKey>
 ```
@@ -262,10 +262,10 @@ dcupl workflow test --path workflows/my-workflow.workflow-v3.json \
 
 ```bash
 # Interactive (prompts for confirmation):
-dcupl workflow deploy --path workflows/my-workflow.workflow-v3.json --runner <prodRunnerUid>
+dcupl workflow deploy --file workflows/my-workflow.workflow-v3.json --runner <prodRunnerUid>
 
 # Non-interactive / CI (skip confirm):
-dcupl workflow deploy --path workflows/my-workflow.workflow-v3.json --runner <prodRunnerUid> --yes
+dcupl workflow deploy --file workflows/my-workflow.workflow-v3.json --runner <prodRunnerUid> --yes
 ```
 
 `deploy` runs remote validation first, then prompts once before going live. Use `--yes` in CI pipelines.
@@ -299,7 +299,7 @@ A non-zero exit code is returned when any node errored. The command prints `PASS
 For structured output (e.g. when driving from an agent or CI script), pass `--json`:
 
 ```bash
-dcupl workflow test --path workflows/my-workflow.workflow-v3.json --runner <devRunnerUid> --json
+dcupl workflow test --file workflows/my-workflow.workflow-v3.json --runner <devRunnerUid> --json
 ```
 
 The JSON result includes the full trace as a structured object — easier to parse than terminal output and unambiguous on pass/fail.
@@ -329,7 +329,7 @@ The CLI is good for validate/deploy but opaque on run failures. To see the **rea
 ```bash
 # 1. deploy to a reachable runner (a local one is ideal). deploy ships this local file;
 #    `dcupl files push` only syncs the console copy — it's not required to deploy.
-dcupl workflow deploy --path workflows/<key>.workflow-v3.json --runner <runnerUid> --yes
+dcupl workflow deploy --file workflows/<key>.workflow-v3.json --runner <runnerUid> --yes
 
 # 2. trigger the runner directly — dataTrace surfaces per-node errors
 curl -s -X POST \
