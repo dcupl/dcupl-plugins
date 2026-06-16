@@ -12,7 +12,8 @@
       "source": "./dcupl",
       "description": "Skills for the dcupl ecosystem — data model authoring, app-loader configs (dcupl.lc.json), workflow templates, querying via the dcupl app daemon, project scaffolding, credential config, and cloud file sync.",
       "category": "productivity",
-      "tags": ["dcupl", "data-modeling", "workflows"]
+      "tags": ["dcupl", "data-modeling", "workflows"],
+      "license": "MIT"
     }
   ]
 }
