@@ -8,9 +8,6 @@ Claude Code (CLI) and the Claude desktop app.
 
 ## Installation
 
-> This repo is private — you need read access to the `dcupl` GitHub org, and your
-> local `git`/`gh` auth must be able to clone it.
-
 In Claude Code or the Claude app, run:
 
 ```
