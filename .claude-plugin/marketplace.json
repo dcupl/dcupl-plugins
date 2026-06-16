@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace-manifest.json",
+  "name": "dcupl-plugins",
+  "owner": {
+    "name": "dcupl",
+    "email": "dominik.strasser@dcupl.com"
+  },
+  "description": "Plugins for the dcupl ecosystem — data models, app-loader configs, workflow templates, querying, scaffolding, and cloud file sync.",
+  "plugins": [
+    {
+      "name": "dcupl",
+      "source": "./dcupl",
+      "description": "Skills for the dcupl ecosystem — data model authoring, app-loader configs (dcupl.lc.json), workflow templates, querying via the dcupl app daemon, project scaffolding, credential config, and cloud file sync.",
+      "category": "productivity",
+      "tags": ["dcupl", "data-modeling", "workflows"]
+    }
+  ]
+}

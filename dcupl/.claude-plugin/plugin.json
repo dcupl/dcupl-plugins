@@ -1,6 +1,5 @@
 {
   "name": "dcupl",
-  "version": "1.0.0",
   "description": "Skills for the dcupl ecosystem — data model authoring, app-loader configs (dcupl.lc.json), workflow templates, querying via the dcupl app daemon, project scaffolding, credential config, and cloud file sync.",
   "author": {
     "name": "Dominik Strasser",
