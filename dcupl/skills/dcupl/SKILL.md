@@ -13,26 +13,22 @@ Before anything else, determine whether the current directory is a dcupl workspa
 
 - **In a workspace** — new apps and data are wired through the **Loader**. Whenever you add a data file, model, or link, you must also register it in `dcupl.lc.json`, or the loader won't see it.
 - **Not in a workspace** — don't start authoring loosely. Ask the user whether there's a related workspace or dcupl console project elsewhere, and guide them through a proper setup (`dcupl init`, or bootstrap from an existing console project) before adding data.
+- **Version it in git.** A dcupl workspace is source — models, loader config, workflows, and data all benefit from history. If the workspace isn't a git repo (`git rev-parse --is-inside-work-tree` fails), suggest `git init` before you start changing things, so the user can review and roll back. See "Wrapping up every turn" for committing as you go.
 
-## Then: confirm the CLI version you're about to use is ≥ 1.3.4
+## Then: confirm the CLI version is ≥ 1.4.0-beta.0
 
-It is common for a workspace to have a `@dcupl/cli` pinned in `node_modules` that lags behind the user's globally installed `dcupl`. **Everything under `dcupl app *` in this skill (and `dcupl serve list` / `dcupl serve stop`) requires CLI ≥ 1.3.4.** Older versions (e.g. 1.3.2) don't ship the `app` subcommand at all — and instead of erroring on the unknown subcommand, they **silently exit 0 with no output**, which looks identical to success. You'll only notice when `dcupl app list` then reports "No apps running".
-
-Check both before running any `dcupl app` recipe:
+This skill is written and verified against **`@dcupl/cli` 1.4.0-beta.0** (`@dcupl/* 2.0.0-beta.6`). That's the assumed floor — bump it once dcupl leaves beta. A workspace often pins an older `@dcupl/cli` in `node_modules` that lags the user's global `dcupl`, and older CLIs lack newer subcommands/flags (and some pre-1.3.4 versions silently exit 0 on an unknown subcommand rather than erroring — success-looking no-ops). So check what you're actually running before relying on any recipe here:
 
 ```bash
 dcupl --version          # what's on PATH (typically the global install)
 npx dcupl --version      # what the project's node_modules resolves
 ```
 
-- **Both ≥ 1.3.4** → either works. Prefer `dcupl` to keep commands short.
-- **Only the global is current** → use bare `dcupl`, NOT `npx dcupl`. The repo's `package.json` scripts (e.g. `npm run serve`) will still hit the older local CLI — fine for `dcupl serve` but not for `dcupl app`.
-- **Both old** → tell the user; recommend `npm i -g @dcupl/cli@latest` (or upgrading the workspace's `@dcupl/cli` dependency). Don't try to work around it.
+- **Both current** → either works. Prefer bare `dcupl` to keep commands short.
+- **Only the global is current** → use bare `dcupl`, NOT `npx dcupl`. The repo's `package.json` scripts (e.g. `npm run serve`) still hit the older local CLI — fine for `dcupl serve`, not for `dcupl app`.
+- **Both old** → tell the user; recommend `npm i -g @dcupl/cli@latest` (or upgrading the workspace dependency). Don't try to work around it.
 
-Two further traps from the old-CLI shape:
-
-- **`dcupl serve list` on a pre-1.3.4 CLI is parsed as `dcupl serve [path=list]`** — i.e. it *starts* a dev server rooted at `./list` instead of listing serves. Symptom: port 8083 is suddenly occupied and the daemon you wanted to spin up can't auto-serve. Fix: `lsof -ti tcp:8083 | xargs -r kill`, then use the global CLI.
-- **Unknown flags on `dcupl app *` are silently ignored**, not rejected. A wrong flag name on `query execute` — e.g. `--queries` (plural) instead of `--query`, or the old `--filter` on a CLI that has since renamed it — doesn't error; it returns the *unfiltered* result (every record). When a query feels like it returned "too much", re-check the flag name against `dcupl app <verb> --help` before assuming the data is wrong.
+Unknown flags and subcommands on a current CLI fail loudly — `dcupl app query execute --queries …` returns `{"code":"UNKNOWN_OPTION", …}`, usually with a "Did you mean --query?" hint — so a mistyped flag errors rather than silently returning unfiltered data. If a command instead does nothing and exits 0, suspect an old CLI and re-check the version.
 
 ## How to start a daemon — pick your source
 
@@ -80,9 +76,9 @@ dcupl schemas get <Name> --example   # source plus a curated example (only some 
 dcupl schemas get <Name> --json      # structured for piping
 ```
 
-> ⚠️ `--example` only appends a curated example for a subset of schemas — as of CLI 1.3.4 / `@dcupl/* 2.0.0-beta.6` that includes `ModelDefinition`, `AppLoaderConfiguration`, `TemplateV3`, `WorkflowConfigV3`, and some workflow-node configs (e.g. `ScriptStepConfig`). For others (`DcuplCliConfig`, `Property`, `Reference`, `WorkflowVariable`) `--example` is a silent no-op that just prints the type/source. Don't rely on it for those.
+> ⚠️ `--example` only appends a curated example for a subset of schemas — `ModelDefinition`, `AppLoaderConfiguration`, `TemplateV3`, `WorkflowConfigV3`, and some workflow-node configs (e.g. `ScriptStepConfig`). For others (`DcuplCliConfig`, `Property`, `Reference`, `WorkflowVariable`) `--example` is a silent no-op that just prints the type/source. Don't rely on it for those.
 >
-> ⚠️ **Treat curated examples as shape guidance, not gospel.** Several examples currently teach API that doesn't exist (dcupl-cli#145): `ModelDefinition --example` puts a `property` field on a reference that `ReferenceBase` doesn't have (exactly the anti-pattern `references/model-authoring.md` warns about), and the `ScriptStepConfig`/`TemplateV3` examples use sandbox globals (`items`, `input`) that aren't real. When an example and the schema (or a reference file here) disagree, the schema wins.
+> ⚠️ **Treat curated examples as shape guidance, not gospel — when an example and the schema disagree, the schema wins.** Examples have historically drifted from the live API (dcupl-cli#145); if one shows a field or sandbox global that the schema (or a reference file here) doesn't, trust the schema.
 
 Schemas come from the project's installed `@dcupl/*` packages, so the output reflects the version actually in use. Confirm the live version with `dcupl version` if you suspect a mismatch.
 
@@ -116,9 +112,9 @@ For any artifact, the rule is the same:
 **References cheatsheet** (full guide: `references/model-authoring.md` → "Authoring references"):
 
 - Simple FK: `{ "key": "<localColumn>", "type": "singleValued"|"multiValued", "model": "<RemoteModel>" }` — `key` is the local column, not the remote model name.
-- Key values are coerced at join time: a numeric-string FK (e.g. orders.json `customerId: "65"`) **resolves correctly** against an `int`-keyed model — verified on `@dcupl/* 2.0.0-beta.6`. A **basic** reference only "misses" when the key genuinely doesn't exist in the remote model, and that miss is **reported** as `RemoteReferenceKeyNotFound` (with `meta.remoteModel` / `meta.remoteKey`), not swallowed silently. So most `RemoteReferenceKeyNotFound` errors are real dangling references, not type mismatches. (Resolved refs show `_dcupl_ref_: "hit"`; dangling ones `"miss"`.) **QueryReference misses are NOT reported** — see the composite-key section below.
+- Key values are coerced at join time: a numeric-string FK (e.g. orders.json `customerId: "65"`) **resolves correctly** against an `int`-keyed model. A **basic** reference only "misses" when the key genuinely doesn't exist in the remote model, and that miss is **reported** as `RemoteReferenceKeyNotFound` (with `meta.remoteModel` / `meta.remoteKey` on the `$DcuplErrorTrackingErrors` record), not swallowed silently. So most `RemoteReferenceKeyNotFound` errors are real dangling references, not type mismatches. (Resolved refs show `_dcupl_ref_: "hit"`; dangling ones `"miss"`.) **QueryReference misses are NOT reported** — see the composite-key section below.
 - `derive: { localReference, remoteReference }` pulls a value across an existing Reference — it does NOT declare the relationship itself.
-- There is **no declarative composite FK**. To reference INTO a composite-keyed model, use a **QueryReference** (a `query` with `${localColumn}` templates, evaluated per row) — full pattern + traps in `references/model-authoring.md` → "Composite keys — referencing INTO a composite-keyed model". Do NOT build the bridge with an `expression` property feeding a basic reference — that fails structurally (build-step ordering).
+- There is **no declarative composite FK**. To reference INTO a composite-keyed model, use a **QueryReference** (a `query` with `${localColumn}` templates, evaluated per row) — full pattern + traps in `references/model-authoring.md` → "Composite keys — referencing INTO a composite-keyed model".
 - Validate after changes: see "Validate a workspace" below; check `$DcuplErrorTrackingErrors` for `RemoteReferenceKeyNotFound` / `MissingReference`.
 
 A CSV (or JSON/NDJSON) data file can be wired straight into `dcupl.lc.json` as a `type: data` resource bound to a model — there is no need to convert it to JSON first. The loader parses the file and types its columns from the model definition.
@@ -159,7 +155,7 @@ Notes:
 - **Multi-app slices.** Pass `--app-key <key>` (and `--env` / `--tag` / `--var`) to validate one application slice's resource set — same flags as the daemon's process step. See "Multi-app slices" below.
 - **Large datasets can OOM the internal daemon — raise the heap or skip error tracking with `dcupl validate --max-memory <MB>` / `--quality false`** (added in dcupl-cli#154, both passed through to the daemon). Error tracking materializes one record per problem cell — a wide/sparse dataset is millions of records and the build is heavy; if it crashes (`FATAL ERROR: Reached heap limit`), re-run with `dcupl validate --max-memory <MB>` to raise the heap. `--quality false` gives a structural-only load (parses + counts every row, skips error tracking) — a clean run is then your validation signal. (For ad-hoc digging you can still drop to the manual daemon `dcupl app create --load --auto-serve --max-memory <MB> [--quality false] …` and query `$DcuplErrorTrackingErrors`; see `dcupl app create --help` / `references/querying.md`. Background: dcupl/dcupl#178.)
 - **Self-cleaning.** Every run tears down its own daemon and auto-serve; confirm nothing leaked with `dcupl app list` (`[]`). No `npm install` needed — the daemon ships its own `@dcupl/*`; error tracking is on by default.
-- **The loader's CSV parser coerces values, and the resulting error type varies — sometimes there is no error at all.** Verified on `@dcupl/* 2.0.0-beta.6`: a non-numeric cell on a **key** column surfaces as `WrongDataType` (with `expected` / `rawValue` / `typeof` in `meta`); a cell `parseInt` can *partially* read (e.g. `"12.5 kg"` → `12`, `"29.5 inches"` → `29`) is **silently coerced with NO error record** — the planned fix (dcupl#196, `WrongDataType` + `meta.lossy`) has NOT landed as of beta.6 (re-verified 2026-06; tracked in dcupl#203). Likewise, an **empty cell in a numeric (`int`/`float`) column is silently dropped with no error record**, while the same empty cell in a `string` column IS reported as `UndefinedValue` — reporting coverage depends on the declared type. A column that is entirely non-numeric may null every cell yet emit only a single aggregate `UndefinedAttribute` rather than one error per row. **Don't assume a specific error *type*** — read the `errors` breakdown to see what's actually present, and for numeric columns sanity-check the loaded values against the source (a clean error list does NOT prove numeric values weren't silently mangled or dropped — start a daemon and probe with `isTruthy:false`, comparing aggregate counts).
+- **The loader's CSV parser coerces values, and the resulting error type varies — sometimes there is no error at all.** A non-numeric cell on a **key** column surfaces as `WrongDataType` (with `expected` / `rawValue` / `typeof` in `meta`); a cell `parseInt` can *partially* read (e.g. `"12.5 kg"` → `12`, `"29.5 inches"` → `29`) is **silently coerced with NO error record** (the planned fix — `WrongDataType` + `meta.lossy` — is tracked in dcupl#196 / dcupl#203 and had not landed at the floor version). Likewise, an **empty cell in a numeric (`int`/`float`) column is silently dropped with no error record**, while the same empty cell in a `string` column IS reported as `UndefinedValue` — reporting coverage depends on the declared type. A column that is entirely non-numeric may null every cell yet emit only a single aggregate `UndefinedAttribute` rather than one error per row. **Don't assume a specific error *type*** — read the `errors` breakdown to see what's actually present, and for numeric columns sanity-check the loaded values against the source (a clean error list does NOT prove numeric values weren't silently mangled or dropped — start a daemon and probe with `isTruthy:false`, comparing aggregate counts).
 - **For richer queries against the loaded app** — `fn aggregate` (requires a `--types` argument), `fn groupBy`, filters, sorting, pagination — `dcupl validate` is a one-shot report and leaves no daemon behind; start one with `dcupl app create --load` and use the `dcupl app` verbs documented in `references/querying.md`. Read that file for the full `fn` verb signatures rather than guessing.
 
 ## Multi-app slices — `applications[].resourceTags` + `--app-key`
@@ -206,7 +202,7 @@ Each slice gets its own daemon (and its own `--app <id>` for downstream commands
   - **`existing`** (`existing console project`) — bootstraps from an existing dcupl console project (prompts for project, pulls files via the sync engine, writes config). Passing `--project-id <id>` skips the starter prompt and assumes this flow. For a fully non-interactive bootstrap pass **both** `--project-id <id>` and `--api-key <key>` (the key is written to the gitignored `dcupl.secrets.json`). `init --json` works, but its JSON result does not list the pulled files — run `dcupl files status` / `dcupl files list` afterwards to see what arrived.
   - By default `dcupl init` creates a new subfolder (`--name <folder>`, or a bare positional: `dcupl init <folder>`).
   - To scaffold **into the current directory** instead, use `dcupl init --here` or `dcupl init .` — useful when a folder already holds data files you want to turn into a workspace. In this mode pre-existing files are never overwritten (an existing `.gitignore` is kept as-is), and it refuses if the directory already contains a `dcupl.config.json`. **Prefer `--starter empty` with `--here`** — `minimal` would drop sample files the user then has to delete.
-- `dcupl generate <type>` scaffolds one of (exact choices, CLI 1.3.4): `model`, `script`, `transformer`, `operator`, `typescript`, `json-schema`, `test-setup`, `test`, `test-config`. (Note: it's `typescript`/`json-schema`, NOT `type`/`schema`. `generate model --from <data file>` infers a model from CSV/JSON — see `references/model-authoring.md`.) **Caveat:** several `generate` subcommands are interactive and crash with a raw `ExitPromptError` stack trace in non-TTY/agent contexts (e.g. `generate test` has a prompt with no backing flag). But `generate model --from … --json` works well on 1.3.4 — it emits structured JSON including a `diagnostics[]` array (`observedTypes`, `conflict`, `emptyRate` per column) and the chosen `keyStrategy` (it detects duplicate-key columns and falls back to `autoGenerateKey`); when scripting, read that JSON rather than re-parsing the file. `config get --json` also works (apiKey redacted). Only `config set` still ignores `--json` and prints human output.
+- `dcupl generate <type>` scaffolds one of (exact choices): `model`, `script`, `transformer`, `operator`, `typescript`, `json-schema`, `test-setup`, `test`, `test-config`. (Note: it's `typescript`/`json-schema`, NOT `type`/`schema`. `generate model --from <data file>` infers a model from CSV/JSON — see `references/model-authoring.md`.) **Caveat:** several `generate` subcommands are interactive and crash with a raw `ExitPromptError` stack trace in non-TTY/agent contexts (e.g. `generate test` has a prompt with no backing flag). But `generate model --from … --json` works well — it emits structured JSON including a `diagnostics[]` array (`inferredType`, `observedTypes`, `conflict`, `emptyRate` per column) and the chosen `keyStrategy` (it detects duplicate-key columns and falls back to `autoGenerateKey`); when scripting, read that JSON rather than re-parsing the file. `config get --json` also works (apiKey redacted). Only `config set` still ignores `--json` and prints human output.
 - `dcupl serve` runs a local dev server (NestJS + Express, default port 8083). It is a managed resource: list every running serve (manual or `--auto-serve`-spawned) with `dcupl serve list`, and stop one with `dcupl serve stop --port <p>`. `dcupl app list` also shows which serve each daemon is talking to (SERVE column).
 
 For exact options, prefer `dcupl <command> --help` over guessing.
@@ -214,6 +210,14 @@ For exact options, prefer `dcupl <command> --help` over guessing.
 ## Important notes
 
 Standalone rules that don't belong to one workflow but apply across the skill.
+
+### Wrapping up every turn
+
+These apply to **every** dcupl interaction — they're how you close out a turn so the user stays oriented and in control:
+
+- **Summarize the CLI commands you ran.** If a task required `dcupl` commands, end your response with a short, copy-pasteable list of the key commands (in order, with placeholders filled in). The user should be able to read it and understand — and recreate — exactly what happened, without re-reading the whole transcript. Skip this only for pure conversation where you ran nothing.
+- **End with meaningful follow-up questions.** Close by asking one or two concrete next steps phrased as questions the user can just say yes to — *"Want me to break this down by region too?"*, *"Should I wire this model into `dcupl.lc.json` and validate?"*, *"Ready to deploy this to the dev runner?"*. Make them specific to the data/task at hand, not generic ("let me know if you need anything"). Good follow-ups help the user discover what dcupl can do and surface insights they hadn't thought to ask for.
+- **Suggest committing meaningful changes.** If you created or changed something worth keeping — a model, loader config, workflow, or a documented data fix — and the workspace is under git, offer to commit it with a clear message (or remind the user to). Don't commit unprompted; surface it as the natural next step. If the workspace isn't versioned yet, suggest `git init` first (see "Orient first").
 
 ### Data is not edited by hand
 
@@ -225,7 +229,7 @@ A `type: data` resource may set `options.keyProperty` to key records by a column
 
 `keyProperty` accepts a string for a single column (`keyProperty: 'ID'`) or a non-empty array for a composite key (`keyProperty: ['ID', 'Language']`). Composite parts are joined into the internal `.key` with `keyPropertySeparator` (default `'::'`, configurable per resource/container/model). Each part is stringified via `String(value)`, so `null`/`undefined`/`''` produce distinct keys. Multi-variant data — one row per ID per language/region — is the canonical case for composite keys. If even the composite isn't unique, fall back to `autoGenerateKey: true` (random keys, all rows kept) or a transformer.
 
-Composite-key support is available in `@dcupl/* 2.0.0-beta.5+`. **Caveat:** set `keyProperty` either on the model OR on the data resource, never both — duplicate declarations are silently applied twice and produce malformed keys (e.g. `"100::Foo::Foo"` instead of `"100::Foo"`).
+Prefer declaring `keyProperty` in **one place** — either the model or the data resource — for clarity about where the key comes from.
 
 ### Model & data errors — `$DcuplErrorTrackingErrors`
 
@@ -233,7 +237,7 @@ When error tracking is enabled, the internal Model `$DcuplErrorTrackingErrors` c
 
 > ⚠️ **Record cap.** The model stores at most **1000 records per error group** (`maxErrorsPerGroup`, an OOM guard) — and both `query execute` and `fn facets` against it present the capped number as if it were the total: a workspace with 44k identical errors facets as `count: 1000`. Treat any group sitting at exactly 1000 as "1000 **or more**" and quantify the real extent with a direct probe on the affected model (e.g. `fn metadata --query '{"operator":"isTruthy","attribute":"<attr>","value":false}'`). Tracked in dcupl#204. See **Validate a workspace** above for the exact commands to load a workspace and query this Model.
 
-The error taxonomy lives in the SDK at `@dcupl/common` → `QualityAnalyzer` (`packages/common/src/types/quality.types.ts`). As of `@dcupl/*` 2.0.0-beta.x:
+The error taxonomy lives in the SDK at `@dcupl/common` → `QualityAnalyzer` (`packages/common/src/types/quality.types.ts`):
 
 - **Model errors** (`type: 'model'`)
   - groups: `ReferenceDataError`, `PropertyDataError`, `DataContainerError`, `ModelDefinitionError`

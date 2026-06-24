@@ -120,7 +120,7 @@ dcupl files push --path models/ --path data/products.csv   # scope to subset
 
 **Server-side drift.** If the server has lost a file since the last sync (e.g. another collaborator deleted it, the version was wiped, or any out-of-band change), additive `push` re-uploads it from the local workspace — the baseline is treated as a record of what the server *should* still have, not as ground truth. `status` shows the file under uploads with the reason `server diverged from baseline (file missing on server, re-uploading from local)`. Use this to recover from server-side wipes without manually clearing `.dcupl/`. If you instead want to mirror the server-side deletion locally, run `pull --strict` (which prompts before deleting). The symmetric case — a local file you deleted while the server is unchanged — is not auto-restored by additive `pull`; use `pull --strict` if you want server-side state to win.
 
-**Sync state.** Lives under `.dcupl/sync-state/` (verified on CLI 1.3.4 — there is no `baselines/` directory):
+**Sync state.** Lives under `.dcupl/sync-state/` (there is no `baselines/` directory):
 - `.dcupl/sync-state/HEAD` — last version synced against.
 - `.dcupl/sync-state/<versionId>.json` — per-version baseline manifest used for 3-way diff (e.g. `draft.json`).
 - `.dcupl/.gitignore` — auto-written on first sync so the `.dcupl/` internals don't get committed. Don't touch this manually.

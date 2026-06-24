@@ -22,7 +22,7 @@ This reference covers the full loop: authoring a `TemplateV3` file, validating i
 | `s3-files` | `S3FilesStepConfig` | `dcupl schemas get S3FilesStepConfig` | Read/write objects in an S3 bucket. |
 | `azure-files` | `AzureFilesStepConfig` | `dcupl schemas get AzureFilesStepConfig` | Read/write blobs in Azure storage. |
 | `git-files` | `GitFilesStepConfig` | `dcupl schemas get GitFilesStepConfig` | Read/write files in a git repository. |
-| `response-script` | `ResponseScriptConfig` | `dcupl schemas get ResponseScriptConfig --example` | Code shaping the HTTP response. Config field is **`script`** (a string of code). |
+| `response-script` | `ResponseScriptConfig` | `dcupl schemas get ResponseScriptConfig --example` | Code shaping the HTTP response. Config field is **`script`** (a string of code), plus an optional `headers` map. |
 | `response-status` | `ResponseStatusConfig` | `dcupl schemas get ResponseStatusConfig` | Derive HTTP status from workflow completion state. **Config is an empty object `{}`** — no fields. |
 
 To see the discriminated-union of all node shapes in one place: `dcupl schemas get WorkflowNode`.
@@ -36,7 +36,7 @@ To see the discriminated-union of all node shapes in one place: `dcupl schemas g
 
 ## Runtime limits — design within the envelope BEFORE authoring
 
-Runners enforce hard budgets (sourced from the console `WORKFLOWS_RUNTIME` feature). **Neither local nor remote `validate` checks them** — a workflow can be `valid: true` and still be structurally unable to ever finish. In testing, this single gap caused every run failure (~12 deploy/trigger/trace cycles, 4 redesigns). Defaults observed on a dev runner (2026-06):
+Runners enforce hard budgets (sourced from the console `WORKFLOWS_RUNTIME` feature). **Neither local nor remote `validate` checks them** — a workflow can be `valid: true` and still be structurally unable to ever finish. In testing, this single gap caused every run failure (~12 deploy/trigger/trace cycles, 4 redesigns). Typical dev-runner defaults (your project's effective values are exposed in `deploy --json` → `runtime` — check there before designing anything non-trivial):
 
 | Limit | Default | Meaning |
 |---|---|---|
@@ -64,7 +64,7 @@ Design consequences for payloads beyond ~1MB:
 
 Every step receives an array of **items**, each `{ json: {...} }`, and emits the same shape on an output port. Edges wire one node's output port to the next node's input port (usually `main`). You reach incoming data two ways:
 
-- **Inside a `script` node:** the input is exposed through `$json` — `$json.first()` is the first input item's `json`, `$json.last()` the last, `$json.at(i)` the i-th (see fan-in below). `$json` exposes only `first` / `last` / `at` / `fromPort` — there is **no** global `items` array and **no** `$json.all()` (both are `undefined`; verified on `@dcupl/* 2.0.0-beta.6` — even though the CLI's own `ScriptStepConfig --example` still shows an `items` global; the example is wrong, dcupl-cli#145).
+- **Inside a `script` node:** the input is exposed through `$json` — `$json.first()` is the first input item's `json`, `$json.last()` the last, `$json.at(i)` the i-th (see fan-in below). For the whole input array use `$items()` (the form the `ScriptStepConfig --example` now shows). `$json` exposes only `first` / `last` / `at` / `fromPort` — there is **no** bare `items` global and **no** `$json.all()` (both are `undefined`).
 - **Inside config string fields** (`request.url`, `dcupl-files` path/content, …): template expressions, evaluated against the first input item:
   - `{{$json.field}}` — one field of the incoming json (coerced to string)
   - `{{$json}}` — the entire incoming json, stringified
@@ -77,7 +77,7 @@ A node's output json becomes the next node's `{{$json}}`. To pass a value downst
 
 Output does **not** accumulate down the chain. A node reads only what its incoming edge(s) deliver — there is no way to reach back to an earlier node (no `$node`, no `$('name')`, no merged history). Two consequences to plan around:
 
-- **Some step nodes replace the json wholesale.** A `dcupl-files` node emits `{ files: [...], ok }` and drops every upstream key — so a `report` your cleaning script built two nodes back is *gone* by the time a later node runs. (Verified: a script returning `{csv, report}` followed by a `dcupl-files` write yields just `{files, ok}` downstream.)
+- **Some step nodes replace the json wholesale.** A `dcupl-files` node emits `{ files: [...], ok }` and drops every upstream key — so a `report` your cleaning script built two nodes back is *gone* by the time a later node runs. (A script returning `{csv, report}` followed by a `dcupl-files` write yields just `{files, ok}` downstream.)
 - **To combine outputs from non-adjacent nodes, fan in.** Wire an edge from *each* source node into the same target node. The target then receives an ordered multi-input collection — `$json.at(0)`, `$json.at(1)`, … in **`edges[]` declaration order** (also `.first()` / `.last()`). Since the order is positional, it's more robust to pick each input **by shape** than by index:
 
 ```js
@@ -218,7 +218,7 @@ dcupl workflow validate --file workflows/my-workflow.workflow-v3.json --runner <
 dcupl workflow runners list
 ```
 
-> ⚠️ The subcommand is **`runners list`** — bare `dcupl workflow runners` exits 1 on CLI 1.3.4.
+> ⚠️ The subcommand is **`runners list`** — bare `dcupl workflow runners` prints help and exits 1.
 
 Prints a table: `uid`, `runnerKey`, `type`, `url`. Pick a **dev runner** UID for the `test` command and a **production runner** UID for `deploy`. These are different runners — `test` is intentionally destructive (it overwrites the runner's current deployment), so never point it at a production runner.
 
@@ -377,9 +377,9 @@ See `references/cloud-sync.md` for the full file-sync reference.
 ## Common mistakes
 
 - **Using `code` instead of `script`** in a script or response-script node config. The field is always `script`.
-- **Setting fields on `response-status` config.** The config must be `{}`. Status is derived from workflow completion; any fields are ignored or cause a validation error.
+- **Setting fields on `response-status` config.** The config must be `{}`. Status is derived from workflow completion. Extra fields don't error — the schema silently **strips** them (Zod `.strip`), so a `statusCode` you add there is dropped with no warning and has no effect. Author it as `{}` so intent is clear.
 - **Pointing `test` at a production runner.** `test` deploys unconditionally. Use a dedicated dev runner.
 - **Running `test` without `--runner`.** Remote test requires a runner UID — there is no local executor.
-- **A fix that "doesn't take" after `deploy`.** `deploy`/`test` send the local file's content (verified in the CLI), so your edits *do* ship — but the runner's hot-swap can lag the command returning, so a trigger fired immediately after may still hit the previous deployment and reproduce the old error. If a fix seems ignored, re-trigger after a moment or re-deploy before concluding the code is wrong. (Separately, `deploy` does not push to the console — run `dcupl files push` to keep the cloud copy in sync.)
+- **A fix that "doesn't take" after `deploy`.** `deploy`/`test` send the local file's content, so your edits *do* ship — but the runner's hot-swap can lag the command returning, so a trigger fired immediately after may still hit the previous deployment and reproduce the old error. If a fix seems ignored, re-trigger after a moment or re-deploy before concluding the code is wrong. (Separately, `deploy` does not push to the console — run `dcupl files push` to keep the cloud copy in sync.)
 - **Reaching for bare `csvToJson`/`jsonToCsv` in a script node.** They aren't in the sandbox — use the namespaced `_csv.toJSON` / `_csv.fromJSON` (see "Authoring node logic").
 - **Confusing the two apiKeys.** `dcupl-files` `auth.apiKey` is a project *workflow* key, not the console UUID in `dcupl.secrets.json`. A 403 on a files node almost always means the wrong key.

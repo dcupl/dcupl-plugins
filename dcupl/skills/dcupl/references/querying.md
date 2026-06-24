@@ -78,7 +78,7 @@ Then summarize what you found and surface 1-2 notable patterns. Skip this for na
 - `MODEL_NOT_FOUND` doesn't mean "create the model"; the user might have typo'd a name. Run `app models keys --json` and confirm.
 - `MULTIPLE_APPS` means there's >1 daemon running. Run `app list --json`, ask the user which they meant, or infer from `cwd` if you can.
 - `NETWORK` (daemon unreachable) usually means a stale registry entry. `app list` auto-prunes dead pids — re-run it.
-- `BAD_INPUT` is your fault — re-read the command's option requirements.
+- `UNKNOWN_OPTION` / `PARSE_ERROR` / `PROJECTION_INVALID_SHAPE` are your fault — a mistyped flag, a missing argument, or a malformed `--projection`. `UNKNOWN_OPTION` usually carries a "Did you mean …?" hint; re-read the command's option requirements (`--help`).
 - `TYPE_MISMATCH` (only from `fn aggregate`): the user asked for `avg`/`sum` on a non-numeric column. The error message names the column and its current type — fix is `models set` with the right type, then `data set` (full replace) to re-type existing rows.
 
 **7. Suggest follow-ups.** After answering an analytical question, offer 1-2 natural next steps. This helps users discover what dcupl can do and surfaces follow-on insights they hadn't considered.
@@ -93,7 +93,7 @@ The CLI can return a well-formed but wrong answer. Before turning a result into 
 - **`avg`/`sum` not 0 or undefined?** That's the numeric-types gotcha — the column is `string`/`any`. Fix the model, then re-run; don't report the 0.
 - **`distinct` count sane?** A distinct count equal to the row count on a column you expected to repeat means values aren't matching — check for stray whitespace or inconsistent casing.
 - **Empty filter result?** Before reporting "zero matches", confirm it isn't a `find` pattern that needed slash-delimiters, or a numeric comparison silently running against a string column. **Also check the attribute name against `fn metadata`**: a typo'd attribute in a `--query` filter or `fn facets --attribute` returns a silent `[]` with exit 0 — indistinguishable from zero matches (only `fn groupBy`/`fn aggregate` hard-error on unknown attributes, and with a misleading `INTERNAL` code). The same silent `[]` happens when querying a column that was consumed by `keyProperty` — its values live under `key`, not the original column name.
-- **Group/facet sizes sum to the total?** `fn groupBy` group sizes — and `fn facets` counts — should add up to `currentSize`. Both **silently exclude blank/missing values** (there is no `(blank)` bucket), so a shortfall is your only signal of missing data. Quantify it with `{"operator":"isTruthy","attribute":"<attr>","value":false}`.
+- **Group/facet sizes sum to the total?** `fn groupBy` group sizes — and `fn facets` counts — should add up to `currentSize`. The subtlety: an **empty string** (e.g. a blank CSV cell) gets its own real `""` bucket and *does* count toward the total, but a **genuinely missing property** (an absent key in JSON, or a column the model doesn't declare) is silently excluded with no bucket. So a shortfall below `currentSize` signals missing *properties*, not blank cells. Quantify either with `{"operator":"isTruthy","attribute":"<attr>","value":false}` (which catches both empty and missing).
 
 If a check fails, fix the cause and re-run — don't report a suspect number with a caveat.
 
@@ -205,7 +205,7 @@ dcupl app loaders remove --loader catalog               # detach
 
 ## `fn groupBy --aggregate` for one-shot group-by-aggregate
 
-A `fn groupBy` without flags returns the count of records per group value. To compute per-group stats in a single command, pass `--aggregate <attribute>:<type>` (repeatable):
+A `fn groupBy` without flags returns the count of records per group value. The response is **not** a flat `[{value,count}]` array — it's `{ "_meta": {...}, "items": [ { "key", "value", "_meta": { "size" }, "_aggregates"? } ] }`, so each group's count is at `items[].​_meta.size` (and the group value at `items[].value`). To compute per-group stats in a single command, pass `--aggregate <attribute>:<type>` (repeatable):
 
 ```bash
 # Avg price per category in one call
@@ -272,7 +272,7 @@ What you can expect:
 |---|---|
 | **JSON/NDJSON, all rows numeric** (`{"price": 99.99}`) | Inferred as `float`. Works without flags too. |
 | **JSON/NDJSON, mixed empty/numeric** (`{"price": ""}` then `{"price": 99.99}`) | Inferred as `any` — SDK widens on mixed types rather than narrowing. `TYPE_MISMATCH` on `avg`/`sum`. |
-| **CSV, clean numeric column, WITH multi-row sampling** (`--auto-generate-sample-size N` / `--auto-generate-deep`) | Inferred as `int`/`float` — `avg`/`sum`/`min`/`max` work with **NO explicit model**. ✅ Verified on CLI 1.3.4 / `@dcupl 2.0.0-beta.5` (`price` → `float`, `inStock`/`vendorId` → `int`). |
+| **CSV, clean numeric column, WITH multi-row sampling** (`--auto-generate-sample-size N` / `--auto-generate-deep`) | Inferred as `int`/`float` — `avg`/`sum`/`min`/`max` work with **NO explicit model** (`price` → `float`, `inStock` → `int`). |
 | **CSV, default (row-1-only inference)** | Typically `string` — no sampling, so the SDK only sees row 1's stringified cell. |
 | **CSV, mixed/sparse column** | Widened to `any` even with sampling — `TYPE_MISMATCH` on `avg`/`sum`; declare an explicit model. |
 
@@ -310,7 +310,7 @@ Property types: `string`, `int`, `float`, `boolean`, `date`, `json`, plus arrays
 
 Queries are JSON objects passed to `--query` (or `--query-file <path>` for big ones). Both forms accept **a single condition, an array of conditions, or a full query group** — the daemon normalizes whatever you pass into a complete query group, so you never supply `queries`/`groupType`/`groupKey` yourself.
 
-> **Flag names:** `--query` / `--query-file` are current as of the CLI release that unified query handling. Older CLIs used `--filter` / `--filter-file`. Unknown flags are **silently ignored** (the command returns the *unfiltered* result, i.e. every record), so if a query seems to do nothing, confirm the flag against `dcupl app query execute --help` before trusting the data.
+> **Flag names:** `--query` / `--query-file` are current. Older CLIs used `--filter` / `--filter-file`. An unknown flag now **errors** with `{"code":"UNKNOWN_OPTION"}` (often with a "Did you mean --query?" hint) rather than silently returning unfiltered data — so a mistyped flag fails loudly. Still, confirm flag names against `dcupl app query execute --help` when unsure.
 
 **Single condition (most common):**
 
@@ -337,7 +337,7 @@ The daemon wraps this into a full query group automatically.
 
 **`find` has two modes** depending on the `value` shape:
 
-- **Bare string** (e.g. `"Sneaker"`) — **exact-equality** match against the *whole* field value, NOT a substring. ⚠️ Verified on CLI 1.3.4 / `@dcupl 2.0.0-beta.5`: `find` with `"Ball"` does **not** match `"Soccer Ball"` — it returns `[]`. The characters `^`, `$`, `.`, etc. are not metacharacters here. **For substring matching, you must use a slash-delimited regex.**
+- **Bare string** (e.g. `"Sneaker"`) — **exact-equality** match against the *whole* field value, NOT a substring. `find` with `"Ball"` does **not** match `"Soccer Ball"` — it returns `[]`. The characters `^`, `$`, `.`, etc. are not metacharacters here. **For substring matching, you must use a slash-delimited regex.**
 - **Slash-delimited regex** (e.g. `"/^Sneaker/"`, `"/foo/i"`) — treated as a JS-style regex *literal*. Anchors, flags, and substring patterns work as you'd expect.
 
 This means `value: "M"` only matches a field whose entire value is exactly `M`, `value: "/^M/"` matches any field *starting with* `M`, and `value: "/Ball/"` matches any field *containing* `Ball` (e.g. `Soccer Ball`, `Rugby Ball`). If a `find` returns zero unexpectedly, the usual cause is using a bare string where you needed a `/regex/` for substring/pattern matching.
@@ -374,7 +374,8 @@ For most exploratory work, a single condition via `--query` is enough. Use `--qu
   - Object: `--projection '{"id":true,"name":true}'` (use `false` to exclude)
   - Array: `--projection '["id","name"]'`
   - Comma list: `--projection 'id,name'`
-  - Malformed input fails with `PROJECTION_INVALID_SHAPE`, not a silent partial result
+  - Nested object on a reference attribute inlines remote fields — see "Working with references in queries" below.
+  - Unparseable JSON fails with `PROJECTION_INVALID_SHAPE` (not a silent partial result). A value that parses but isn't a sensible projection shape (e.g. `'42'`) is accepted and falls back to returning only `key` — so a result that's missing fields you expected usually means a wrong-shaped projection, not missing data.
 
 ## Working with references in queries
 
@@ -388,23 +389,24 @@ For each referenced item, the result contains `{ key, _dcupl_ref_ }`:
 - `_dcupl_ref_: "miss"` — the foreign key has no matching record (dangling FK).
 - `_dcupl_ref_: "auto_hit"` — an auto-resolved / auto-created remote reference.
 
-This is a great quick visual signal of which joins landed and which dangle, but it means **`query execute` and `query one` do not traverse the relationship** — you don't get the remote record's fields inlined. On `query execute`, `--projection` doesn't change this either:
+This is a great quick visual signal of which joins landed and which dangle. By default — and with a plain array/comma projection (`--projection '["key","customerId"]'`) — a referenced attribute stays a `{ key, _dcupl_ref_ }` marker; the remote record's fields are **not** inlined.
+
+**A nested-object projection inlines the remote fields.** When you project a reference attribute with a nested object selecting remote properties, `query execute` traverses the relationship and inlines those fields:
 
 ```bash
-# This LOOKS like it should pull customerId.name into the result, but nested
-# projection on a reference attribute is silently ignored — you still get
-# {key, _dcupl_ref_} for customerId.
+# Nested projection on a reference attribute pulls customerId.name into the result.
 dcupl app query execute --model orders --query '{"operator":"eq","attribute":"orderId","value":"<id>"}' \
-  --projection '{"orderId":true,"customerId":{"name":true},"articleIds":{"productName":true}}' --json
+  --projection '{"orderId":true,"customerId":{"name":true,"country":true}}' --json
+# → {"orderId":"<id>","customerId":{"key":"1","name":"John Doe","country":"USA"}}
 ```
 
-Note that `query one` accepts only `--model` and `--item-key` — it has no `--projection` flag (a passed `--projection` is silently dropped). Projection lives only on `query execute`, so use that verb if you need it.
+So `query execute` with a nested projection is the most direct way to inline related fields. Two notes:
+- This works on `query execute` only. **`query one` has no `--projection` flag** — passing one errors with `{"code":"UNKNOWN_OPTION"}`. Use `query execute` (with `--item-key` filtering or an `eq` on the key) if you need projection on a single record.
+- The analytical verbs (`fn facets` / `fn groupBy`) traverse references via **dotted attribute** notation (see below) — use those for breakdowns by a remote field.
 
-If you need related fields inlined, you have two options:
-- **Use `fn facets` / `fn groupBy` with a dotted attribute** (see below) — works for the analytical verbs.
-- **Hop manually**: `query execute` the local record, take each `key` from the reference, then `query one --model <RemoteModel> --item-key <key>`.
+If you'd rather not project, you can still **hop manually**: `query execute` the local record, take each `key` from the reference, then `query one --model <RemoteModel> --item-key <key>`.
 
-> **Filtering DOES traverse references** — it's only output inlining that doesn't. A `--query` condition can use dotted notation across a singleValued reference: `{"operator":"eq","attribute":"vendorId.country","value":"Austria"}` filters records by their referenced vendor's country. Filtering on the reference attribute itself matches by remote key: `{"operator":"eq","attribute":"vendorId","value":"v-005"}`. Verified on `@dcupl/* 2.0.0-beta.6`.
+> **Filtering DOES traverse references.** A `--query` condition can use dotted notation across a singleValued reference: `{"operator":"eq","attribute":"vendorId.country","value":"Austria"}` filters records by their referenced vendor's country. Filtering on the reference attribute itself matches by remote key: `{"operator":"eq","attribute":"vendorId","value":"v-005"}`.
 
 ### Dotted-reference traversal in `fn facets` and `fn groupBy`
 
@@ -509,7 +511,7 @@ This is the manual/auto-update trade-off in practice: `--auto-update` is conveni
 - **`fn groupBy` returns group keys + sizes, not records inside each group.** If you want the records, follow up with `query execute --query` per group.
 - **`--content` for small inline data, `--file` for anything substantial.** Inline payloads have shell-escaping pain at scale; over a few KB, write a temp file or use `--content -` to pipe.
 - **Drop `--json` for table output.** When you're exploring interactively in a terminal, omitting `--json` renders arrays-of-records as ASCII tables. Add `--json` back the moment you start piping into another tool.
-- **Reserved error codes:** `APP_NOT_FOUND`, `MULTIPLE_APPS`, `MODEL_NOT_FOUND`, `BAD_INPUT`, `NOT_FOUND`, `UNAUTHORIZED`, `INVALID_RESPONSE`, `NETWORK`, `INTERNAL`. Programmatic callers should match on `code`, not `message`.
+- **Reserved error codes:** `APP_NOT_FOUND`, `MULTIPLE_APPS`, `MODEL_NOT_FOUND`, `MISSING_APP_ID`, `NOT_FOUND`, `UNAUTHORIZED`, `INVALID_RESPONSE`, `NETWORK`, `INTERNAL`, `TYPE_MISMATCH`. Argument-parsing failures have their own finer-grained codes — `UNKNOWN_OPTION` (unrecognized flag, often with a "Did you mean" hint), `PARSE_ERROR` (missing/malformed argument), and `PROJECTION_INVALID_SHAPE` (unparseable `--projection`) — rather than a generic `BAD_INPUT`. Programmatic callers should match on `code`, not `message`.
 
 ## CLI invocation — finding `dcupl`
 

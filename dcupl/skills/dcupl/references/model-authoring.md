@@ -140,7 +140,7 @@ Using `derive` to *create* a relationship (e.g. with `localReference` set to a r
 
 ### Composite keys — referencing INTO a composite-keyed model
 
-A model can be keyed by several columns (`"keyProperty": ["masterCategory", "subCategory", "articleType"]` → internal keys like `"Apparel::Topwear::Shirts"`; see "Keying data resources" in SKILL.md). There is **no declarative composite FK** — a basic Reference joins on exactly one local column. The working bridge, verified on `@dcupl/* 2.0.0-beta.6` against 44k rows:
+A model can be keyed by several columns (`"keyProperty": ["masterCategory", "subCategory", "articleType"]` → internal keys like `"Apparel::Topwear::Shirts"`; see "Keying data resources" in SKILL.md). There is **no declarative composite FK** — a basic Reference joins on exactly one local column. The working bridge (resolves tens of thousands of rows against a small remote model in seconds at build):
 
 **The solution: a QueryReference.** The `Reference` union accepts a `query` in place of a plain column join (`dcupl schemas get Reference`). The query is template-evaluated **per row**, with `${column}` placeholders filled from the raw data entry — so it can match several local columns against the remote model's properties:
 
@@ -161,12 +161,12 @@ A model can be keyed by several columns (`"keyProperty": ["masterCategory", "sub
 }
 ```
 
-Fully declarative, performs fine (44,446 rows resolved against a 170-record remote model in seconds at build), and dotted traversal works exactly like any other reference (`fn groupBy --attribute category.masterCategory`, `--attribute category.key`).
+Fully declarative, performs fine at scale, and dotted traversal works exactly like any other reference (`fn groupBy --attribute category.masterCategory`, `--attribute category.key`).
 
 > ⚠️ **QueryReference misses are SILENT.** Unlike a basic reference, a query that matches zero records produces NO `RemoteReferenceKeyNotFound` and no `_dcupl_ref_: "miss"` — the attribute is simply never assigned. After wiring one, probe for dangles explicitly:
 > `dcupl app fn metadata --model <M> --query '{"operator":"isTruthy","attribute":"category","value":false}'` — `currentSize` is your miss count.
 
-**The trap: an `expression` property cannot feed a basic reference.** `PropertyBase.expression` is a real (if under-documented) feature — `{"key": "categoryKey", "type": "string", "expression": "${masterCategory}::${subCategory}::${articleType}"}` materializes a computed column on every row, handy as a filter/inspection convenience that mirrors the remote composite key. But do NOT layer a basic reference on top of it: the build pipeline resolves **basic references in step 1** and evaluates **expression properties in step 3**, so the reference reads `undefined` for every row — one `UndefinedValue` error per record, and no rebuild fixes it. This is structural ordering, not a transient bug. Use the QueryReference above instead.
+**Alternative: an `expression`-computed key column.** `PropertyBase.expression` is a real (if under-documented) feature — `{"key": "categoryKey", "type": "string", "expression": "${masterCategory}::${subCategory}::${articleType}"}` materializes a computed column on every row that mirrors the remote composite key, handy as a filter/inspection convenience. A basic reference keyed on that computed column does resolve (an earlier build-ordering bug that left the reference `undefined` no longer reproduces). **Still prefer the QueryReference above** — it's the cleaner, single-artifact declarative bridge and doesn't depend on an intermediate materialized column.
 
 ### Promoting a property to a Reference — drop the property entry
 
