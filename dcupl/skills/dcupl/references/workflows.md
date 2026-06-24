@@ -6,6 +6,14 @@ This reference covers the full loop: authoring a `TemplateV3` file, validating i
 
 > **Start from a real example, and distrust prose docs.** The fastest, least error-prone way to author a v3 workflow is to copy one already working *in this project*: `dcupl files list`, then `dcupl files read --path workflows/<existing>.workflow-v3.json`. That gives you exact node shapes, a valid `apiKey`, and templating that is known to run on the runner — far more reliable than building from scratch. `dcupl schemas get <X> [--example]` is authoritative for `config` field *names*, but it does NOT describe runtime behavior (how data flows between nodes, the script sandbox API, what a node emits) — for that, read "Authoring node logic" below. Do **not** trust `dcupl-internal/docs/reference/workflow-nodes.md`: it is stale and contradicts the live schema (wrong `dcupl-files` shape, response types that don't exist).
 
+## Authoring conventions — do these every time
+
+These make a workflow legible to the user and to whoever maintains it next. None are enforced by the schema; they're the difference between a workflow someone can pick up and one nobody dares touch.
+
+1. **Plan out loud before you author.** Post a short summary first: list the planned nodes in execution order with one line each on what each does (trigger → fetch → transform → write → respond). It lets the user catch a wrong shape or missing step *before* you write any JSON, and it doubles as the note text in step 3.
+2. **Give the workflow a descriptive note on the canvas.** Every workflow should carry a `ui.notes[]` entry briefly describing what it does — see "Canvas annotations" below for the markdown/size/placement convention. Reuse the plan from step 1 as its body.
+3. **Write script-node code to be read.** A `script` node's JS should be understandable at a glance: a header comment, named helper functions, inline comments where the logic isn't obvious — see "The `script` node sandbox" below.
+
 ---
 
 ## Node-type catalog
@@ -107,6 +115,32 @@ Script runs in an isolated VM — not plain Node. The available globals are a cu
 
 When in doubt about a helper, plain JS in the script always works (the data is yours to parse) — but `_csv`/`_json` are more robust (correct escaping) and worth preferring.
 
+#### Write the script to be read
+
+Script-node code lives inside a JSON string and runs out of sight on a runner, so it rots fast if it's a dense one-liner. Write it the way you'd write code you'll have to debug from a trace at 2am:
+
+- **Open with a header comment** stating what the script does, what it **expects** on its input port (the shape of `$json.first()` / `$items()`), and what it **returns** (the keys downstream nodes will read). This is the one comment that pays for itself every time someone opens the node.
+- **Extract named helper functions** for distinct steps (parse, validate, transform, serialize) instead of one long block — they read as a table of contents for the logic.
+- **Comment the non-obvious** — why a field is coerced, which port a `_output.route` branch feeds, any assumption about the upstream shape.
+
+```js
+// Clean articles: parse the incoming CSV, drop rows with no price,
+// round prices to 2 decimals, and emit the cleaned CSV.
+// Expects: $json.first().files[0].data — raw CSV string from the dcupl-files read.
+// Returns: { csv } — cleaned CSV string for the next dcupl-files write.
+const raw = $json.first().files[0].data;
+
+function parse(csv) { return _csv.toJSON(csv); }
+function clean(rows) {
+  return rows
+    .filter((r) => r.price !== "")                 // skip price-less rows
+    .map((r) => ({ ...r, price: Number(r.price).toFixed(2) }));
+}
+
+const headers = ["id", "name", "price"];
+return { csv: _csv.fromJSON(clean(parse(raw)), { headers }) };
+```
+
 ### The `request` node — output shape and `autoParse`
 
 Not in any schema: a `request` node emits one item whose json is
@@ -154,7 +188,13 @@ trigger-request → dcupl-files(read) → script(transform) → dcupl-files(writ
 
 ### Canvas annotations — `ui.notes[]`
 
-A `TemplateV3` can carry sticky notes in `ui.notes[]` (sibling of `ui.positions`, the node-position map). These are **editor-only annotations** — no runtime effect — but useful for documenting a workflow inline on the canvas. Each note:
+A `TemplateV3` can carry sticky notes in `ui.notes[]` (sibling of `ui.positions`, the node-position map). These are **editor-only annotations** — no runtime effect — but they're how a workflow documents itself on the canvas.
+
+**Every workflow you create should carry a description note.** Give it the overview from your authoring plan (the node-by-node summary). Conventions:
+
+- **Content is markdown** — use headings, bold, and lists so it reads well in the console canvas. Line breaks are `\\n` inside the JSON string.
+- **Place it near the first node** (the trigger), so it's the first thing seen when the canvas opens — e.g. just above or beside the trigger's position.
+- **Default size ≈ 600 × 350**, growing it only if the description genuinely needs more room.
 
 ```json
 "ui": {
@@ -163,15 +203,15 @@ A `TemplateV3` can carry sticky notes in `ui.notes[]` (sibling of `ui.positions`
     {
       "id": "note-overview",
       "position": { "x": 100, "y": 260 },
-      "size": { "width": 1400, "height": 170 },
-      "content": "Plain-text note body, \\n for line breaks.",
+      "size": { "width": 600, "height": 350 },
+      "content": "## Clean articles CSV\\n\\nReads `data/articles.csv`, normalizes prices, writes `data/articles.cleaned.csv`.\\n\\n**Nodes:** trigger → read → clean (script) → write → respond.",
       "color": "yellow"
     }
   ]
 }
 ```
 
-`color` is one of `yellow | blue | green | pink | gray | purple`. They survive `deploy` (the runner echoes them back), so **preserve `ui.notes` when round-tripping a template** you read with `dcupl files read`. Confirm the exact shape any time with `dcupl schemas get TemplateV3`.
+`color` is one of `yellow | blue | green | pink | gray | purple`. Notes survive `deploy` (the runner echoes them back), so **preserve `ui.notes` when round-tripping a template** you read with `dcupl files read`. Confirm the exact shape any time with `dcupl schemas get TemplateV3`.
 
 ---
 

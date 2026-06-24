@@ -129,6 +129,8 @@ To **author, build, validate, test, or deploy** a workflow, read `references/wor
 
 After authoring or changing a model, loader config, or data file, confirm the workspace actually loads. **`dcupl serve` does not validate** — it only serves the workspace files over HTTP; it never parses models or loads data, so a green `serve` says nothing about correctness.
 
+**Validate before AND after you change anything.** Run `dcupl validate` (with `--app-key <key>` when the workspace has multiple app slices — see "Multi-app slices") *before* touching models/loader/data to capture a baseline, and again *after*. Comparing the two reports is what tells you whether your change fixed something, broke something, or merely shifted the error counts — a single after-the-fact run can't distinguish "this error was already here" from "I just introduced it." Once validate is clean (or no worse than baseline), **start the app locally and probe your actual change** with `dcupl app` queries / `fn` commands (see `references/querying.md`) — validate confirms the project *loads*, but only a real query confirms your model/data behaves the way you intended.
+
 `dcupl validate` is the one-shot check: it loads the whole project through its loader in an ephemeral daemon, classifies what the loader + parser found, and tears everything (daemon + any auto-spawned serve) back down. Run from the workspace root:
 
 ```bash
