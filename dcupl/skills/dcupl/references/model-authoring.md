@@ -72,7 +72,7 @@ The generated file is a starting point — inference does not set `filter: true`
 
 - Add `filter: true` (and `aggregate: true`) on columns you will query or aggregate.
 - Replace `string` columns that are actually foreign keys with `singleValued` / `multiValued` references — see "Authoring references" below.
-- Enable quality rules (`quality.enabled: true`) and per-property validators.
+- Tune quality rules and add per-property validators where the data warrants them — see "Quality rules & validators" below. Quality is ON by default; you are tuning it, not enabling it.
 - Fix any `any`-typed columns flagged by the diagnostics.
 
 ## Authoring references
@@ -199,3 +199,56 @@ Leaving both entries in place does not error, but it is the canonical "looks wei
 ### Sanity-check after editing
 
 After adding or changing references, re-validate the workspace — [`dcupl validate`](../SKILL.md#validate-a-workspace) loads the loader config in a daemon and surfaces `RemoteReferenceKeyNotFound`, `MissingReference`, and friends (as `ReferenceDataError` warnings). A green result is the only proof the references resolve.
+
+## Quality rules & validators
+
+Quality checks are **on by default** — when error tracking is enabled (the default in `dcupl validate` and `dcupl app create --load`), every model is checked with no `quality` block at all. Two tiers must both be on: the global quality controller (CLI `--quality`, default true) AND the model's `quality.enabled` (default true).
+
+Per-attribute defaults (no config needed):
+
+| Flag | Default | Meaning when violated |
+|---|---|---|
+| `required` | `true` | missing value → `UndefinedValue` error |
+| `nullable` | `false` | null value → `NullValue` error |
+| `forceStrictDataType` | `false` | `false` = coerce (`String()` / `parseInt`); `true` = wrong-typed raw value → `WrongDataType` + value dropped |
+| `validatorHandling` | `'loose'` | `'loose'` = report + keep value; `'strict'` = report + **drop the value from loaded data** |
+
+So an unconfigured model already reports missing/null values (this is why sparse data produces `UndefinedValue` warnings). A `quality` block is for *tuning*: relaxing flags on sparse columns, or adding validators.
+
+### Where quality config lives
+
+- **Model level** — `"quality": { "enabled": true, "attributes": { …flags… } }` sets flag defaults for ALL attributes. ⚠️ Only the four flags work here. **Validators are per-attribute only** — on `@dcupl/common` ≤ 2.0.0-beta.6 the type still permits `attributes.validators`, but the engine silently ignores them (never ran; the type was narrowed in later versions).
+- **Attribute level** — `"quality": { …flags…, "validators": { … } }` on a property or reference; overrides the model-level flags.
+
+```json
+{
+  "key": "Product",
+  "quality": { "attributes": { "nullable": true } },
+  "properties": [
+    {
+      "key": "sku",
+      "type": "string",
+      "quality": {
+        "validators": { "pattern": { "value": "^[A-Z]{2}-\\d{4}$" }, "unique": {} },
+        "validatorHandling": "strict"
+      }
+    }
+  ]
+}
+```
+
+### Available validators
+
+`email`, `enum`, `pattern`, `min`, `max`, `minLength`, `maxLength`, `startsWith`, `endsWith`, `includes`, `unique` — each configured as `{ "value": <arg> }` (`email` and `unique` ignore the value; `{}` is the canonical form). Failures land in `$DcuplErrorTrackingErrors` as errorType `InvalidValidator`, group `PropertyDataError`. Schemas: `dcupl schemas get AttributeQualityConfig --example` and `dcupl schemas get ModelQualityConfig` (registered in CLI releases **after 1.4.0-beta.0**; on older CLIs the types are visible inside `dcupl schemas get ModelDefinition`).
+
+### Ask the user how restrictive to be — BEFORE adding quality rules
+
+Restrictiveness is a data-mutation decision, not a style choice. Ask two questions, separately:
+
+1. **Handling** — "When a value fails validation, should it be **dropped** from the loaded data (`validatorHandling: 'strict'`) or **kept and just reported** (`'loose'`, the default)?" Never choose `strict` silently — strict deletes failing values (and `unique` deletes duplicate values) from the loaded app.
+2. **Coverage** — "How aggressively should I add validators?"
+   - **none** — only tune `required` / `nullable` flags to match the data
+   - **obvious** — add validators the data clearly implies (email columns, enum-like status columns, ID patterns)
+   - **everything inferable** — also min/max ranges, string lengths, uniqueness derived from the observed data
+
+After adding rules, re-run `dcupl validate` and compare against the pre-change baseline (see SKILL.md → "Validate a workspace").
