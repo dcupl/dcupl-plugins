@@ -217,7 +217,7 @@ So an unconfigured model already reports missing/null values (this is why sparse
 
 ### Where quality config lives
 
-- **Model level** — `"quality": { "enabled": true, "attributes": { …flags… } }` sets flag defaults for ALL attributes. ⚠️ Only the four flags work here. **Validators are per-attribute only** — on `@dcupl/common` ≤ 2.0.0-beta.6 the type still permits `attributes.validators`, but the engine silently ignores them (never ran; the type was narrowed in later versions).
+- **Model level** — `"quality": { "enabled": true, "attributes": { …flags… } }` sets flag defaults for ALL attributes. ⚠️ Only the four flags work here. **Validators are per-attribute only** — on `@dcupl/common` ≤ 2.0.0-beta.6 the type still permits `attributes.validators`, but the engine silently ignores them (never ran; the type is narrowed in releases after 2.0.0-beta.6).
 - **Attribute level** — `"quality": { …flags…, "validators": { … } }` on a property or reference; overrides the model-level flags.
 
 ```json
@@ -230,7 +230,7 @@ So an unconfigured model already reports missing/null values (this is why sparse
       "type": "string",
       "quality": {
         "validators": { "pattern": { "value": "^[A-Z]{2}-\\d{4}$" }, "unique": {} },
-        "validatorHandling": "strict"
+        "validatorHandling": "loose"
       }
     }
   ]
@@ -245,7 +245,7 @@ So an unconfigured model already reports missing/null values (this is why sparse
 
 Restrictiveness is a data-mutation decision, not a style choice. Ask two questions, separately:
 
-1. **Handling** — "When a value fails validation, should it be **dropped** from the loaded data (`validatorHandling: 'strict'`) or **kept and just reported** (`'loose'`, the default)?" Never choose `strict` silently — strict deletes failing values (and `unique` deletes duplicate values) from the loaded app.
+1. **Handling** — "When a value fails validation, should it be **dropped** from the loaded data (`validatorHandling: 'strict'`) or **kept and just reported** (`'loose'`, the default)?" Never choose `strict` silently — strict deletes failing values from the loaded app (under strict, `unique` even deletes duplicate values).
 2. **Coverage** — "How aggressively should I add validators?"
    - **none** — only tune `required` / `nullable` flags to match the data
    - **obvious** — add validators the data clearly implies (email columns, enum-like status columns, ID patterns)
