@@ -217,7 +217,7 @@ So an unconfigured model already reports missing/null values (this is why sparse
 
 ### Where quality config lives
 
-- **Model level** — `"quality": { "enabled": true, "attributes": { …flags… } }` sets flag defaults for ALL attributes. ⚠️ Only the four flags work here. **Validators are per-attribute only** — on `@dcupl/common` ≤ 2.0.0-beta.6 the type still permits `attributes.validators`, but the engine silently ignores them (never ran; the type is narrowed in releases after 2.0.0-beta.6).
+- **Model level** — `"quality": { "enabled": true, "attributes": { …flags… } }` sets flag defaults for ALL attributes. ⚠️ Only the four flags work here. **Validators are per-attribute only** — on `@dcupl/common` ≤ 2.0.0-beta.6 the type still permits `attributes.validators`, but the engine silently ignores them (never ran; the type is narrowed since 2.0.0-beta.7).
 - **Attribute level** — `"quality": { …flags…, "validators": { … } }` on a property or reference; overrides the model-level flags.
 
 ```json

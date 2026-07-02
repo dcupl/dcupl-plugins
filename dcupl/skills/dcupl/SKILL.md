@@ -17,7 +17,7 @@ Before anything else, determine whether the current directory is a dcupl workspa
 
 ## Then: confirm the CLI version is ≥ 1.4.0-beta.0
 
-This skill is written and verified against **`@dcupl/cli` 1.4.0-beta.0** (`@dcupl/* 2.0.0-beta.6`). That's the assumed floor — bump it once dcupl leaves beta. A workspace often pins an older `@dcupl/cli` in `node_modules` that lags the user's global `dcupl`, and older CLIs lack newer subcommands/flags (and some pre-1.3.4 versions silently exit 0 on an unknown subcommand rather than erroring — success-looking no-ops). So check what you're actually running before relying on any recipe here:
+This skill is written and verified against **`@dcupl/cli` 1.4.0-beta.0** (`@dcupl/* 2.0.0-beta.7`). That's the assumed floor — bump it once dcupl leaves beta. A workspace often pins an older `@dcupl/cli` in `node_modules` that lags the user's global `dcupl`, and older CLIs lack newer subcommands/flags (and some pre-1.3.4 versions silently exit 0 on an unknown subcommand rather than erroring — success-looking no-ops). So check what you're actually running before relying on any recipe here:
 
 ```bash
 dcupl --version          # what's on PATH (typically the global install)
