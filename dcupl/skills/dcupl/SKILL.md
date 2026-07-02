@@ -17,7 +17,7 @@ Before anything else, determine whether the current directory is a dcupl workspa
 
 ## Then: confirm the CLI version is ≥ 1.4.0-beta.0
 
-This skill is written and verified against **`@dcupl/cli` 1.4.0-beta.0** (`@dcupl/* 2.0.0-beta.7`). That's the assumed floor — bump it once dcupl leaves beta. A workspace often pins an older `@dcupl/cli` in `node_modules` that lags the user's global `dcupl`, and older CLIs lack newer subcommands/flags (and some pre-1.3.4 versions silently exit 0 on an unknown subcommand rather than erroring — success-looking no-ops). So check what you're actually running before relying on any recipe here:
+This skill is written and verified against **`@dcupl/cli` 1.4.0-beta.1** (`@dcupl/* 2.0.0-beta.7`). That's the assumed floor — bump it once dcupl leaves beta. A workspace often pins an older `@dcupl/cli` in `node_modules` that lags the user's global `dcupl`, and older CLIs lack newer subcommands/flags (and some pre-1.3.4 versions silently exit 0 on an unknown subcommand rather than erroring — success-looking no-ops). So check what you're actually running before relying on any recipe here:
 
 ```bash
 dcupl --version          # what's on PATH (typically the global install)
@@ -89,7 +89,7 @@ Schemas come from the project's installed `@dcupl/*` packages, so the output ref
 - `dcupl schemas get AppLoaderConfiguration --example` — `dcupl.lc.json` shape, including the **Resource union** — data-resource `keyProperty` / `autoGenerateKey` / `csvParserOptions` live HERE, not in a standalone schema — plus `applications[].resourceTags`, `variables`, etc.
 - `dcupl schemas get Reference` — `singleValued` / `multiValued` / `derive` / grouped references
 - `dcupl schemas get ModelDefinition --example` — full property/reference/quality shape
-- `dcupl schemas get AttributeQualityConfig --example` / `ModelQualityConfig` — quality flags & validators; per-attribute vs model-level split (standalone entries exist in CLI releases after 1.4.0-beta.0)
+- `dcupl schemas get AttributeQualityConfig --example` / `ModelQualityConfig` — quality flags & validators; per-attribute vs model-level split (standalone entries since CLI 1.4.0-beta.1)
 
 > Note: there is **no** `DataResource` schema in the registry (`dcupl schemas get DataResource` errors). The data-resource shape is part of `AppLoaderConfiguration`'s Resource union.
 

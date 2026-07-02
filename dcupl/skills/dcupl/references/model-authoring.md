@@ -239,7 +239,7 @@ So an unconfigured model already reports missing/null values (this is why sparse
 
 ### Available validators
 
-`email`, `enum`, `pattern`, `min`, `max`, `minLength`, `maxLength`, `startsWith`, `endsWith`, `includes`, `unique` — each configured as `{ "value": <arg> }` (`email` and `unique` ignore the value; `{}` is the canonical form). Failures land in `$DcuplErrorTrackingErrors` as errorType `InvalidValidator`, group `PropertyDataError`. Schemas: `dcupl schemas get AttributeQualityConfig --example` and `dcupl schemas get ModelQualityConfig` (registered in CLI releases **after 1.4.0-beta.0**; on older CLIs the types are visible inside `dcupl schemas get ModelDefinition`).
+`email`, `enum`, `pattern`, `min`, `max`, `minLength`, `maxLength`, `startsWith`, `endsWith`, `includes`, `unique` — each configured as `{ "value": <arg> }` (`email` and `unique` ignore the value; `{}` is the canonical form). Failures land in `$DcuplErrorTrackingErrors` as errorType `InvalidValidator`, group `PropertyDataError`. Schemas: `dcupl schemas get AttributeQualityConfig --example` and `dcupl schemas get ModelQualityConfig` (registered since CLI **1.4.0-beta.1**; on older CLIs the types are visible inside `dcupl schemas get ModelDefinition`).
 
 ### Ask the user how restrictive to be — BEFORE adding quality rules
 
