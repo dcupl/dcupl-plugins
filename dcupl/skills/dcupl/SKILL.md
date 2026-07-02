@@ -52,6 +52,7 @@ Unknown flags and subcommands on a current CLI fail loudly — `dcupl app query 
 | Querying / analyzing tabular data with the `dcupl app` daemon (facets, aggregations, group-bys, filters, counts) | `references/querying.md` |
 | Cloud sync — `dcupl files` status/push/pull, per-file ops, version management | `references/cloud-sync.md` |
 | Generating a model from a data file (`dcupl generate model --from`) | `references/model-authoring.md` |
+| Adding quality rules / validators to a model (ask the user how restrictive first) | `references/model-authoring.md` → "Quality rules & validators" |
 | Building, testing, or deploying a Workflow v3 (`dcupl workflow validate/test/deploy/undeploy/runners`) | `references/workflows.md` |
 | Reviewing / auditing a workflow file (`*.workflow-v3.json`) — esp. before flagging anything as a leaked secret | `references/workflows.md` — a `dcupl-files` node's `auth.apiKey` is a **reference UUID (identifier), committed deliberately**, not a secret. Don't flag it. |
 | Authoring a model, loader config, or workflow v3 | Stay here — see "Authoring playbook" below. |
@@ -88,6 +89,7 @@ Schemas come from the project's installed `@dcupl/*` packages, so the output ref
 - `dcupl schemas get AppLoaderConfiguration --example` — `dcupl.lc.json` shape, including the **Resource union** — data-resource `keyProperty` / `autoGenerateKey` / `csvParserOptions` live HERE, not in a standalone schema — plus `applications[].resourceTags`, `variables`, etc.
 - `dcupl schemas get Reference` — `singleValued` / `multiValued` / `derive` / grouped references
 - `dcupl schemas get ModelDefinition --example` — full property/reference/quality shape
+- `dcupl schemas get AttributeQualityConfig --example` / `ModelQualityConfig` — quality flags & validators; per-attribute vs model-level split (standalone entries exist in CLI releases after 1.4.0-beta.0)
 
 > Note: there is **no** `DataResource` schema in the registry (`dcupl schemas get DataResource` errors). The data-resource shape is part of `AppLoaderConfiguration`'s Resource union.
 
@@ -243,7 +245,7 @@ The error taxonomy lives in the SDK at `@dcupl/common` → `QualityAnalyzer` (`p
 
 - **Model errors** (`type: 'model'`)
   - groups: `ReferenceDataError`, `PropertyDataError`, `DataContainerError`, `ModelDefinitionError`
-  - types: `UndefinedAttribute`, `InvalidValidator`, `UndefinedValue`, `NullValue`, `WrongDataType`, `NonUniqueKey`, `MissingModel`, `MissingProperty`, `MissingReference`, `UnknownExpressionVariable`, `RemoteReferenceKeyNotFound`, `InvalidModelDefinition`, `UnknownColumn` (a CSV column present in the data but not declared on the model; its values are silently dropped)
+  - types: `UndefinedAttribute`, `InvalidValidator` (a quality validator failed — `loose` handling kept the value, `strict` dropped it), `UndefinedValue`, `NullValue`, `WrongDataType`, `NonUniqueKey`, `MissingModel`, `MissingProperty`, `MissingReference`, `UnknownExpressionVariable`, `RemoteReferenceKeyNotFound`, `InvalidModelDefinition`, `UnknownColumn` (a CSV column present in the data but not declared on the model; its values are silently dropped)
 - **Loader errors** (`type: 'loader'`)
   - groups: `LoaderConfigError`, `ResourceError`
   - types: `InvalidConfig`, `InvalidResource`
