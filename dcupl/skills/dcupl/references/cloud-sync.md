@@ -34,6 +34,18 @@ Cloud-sync commands need three pieces of config split across two files at the pr
 
 > The CLI sends this key as a `?apikey=<key>` **query param** on every console/files API request (not an `Authorization` header). A `401`/`403` from a cloud-sync command therefore means the key is wrong, expired, or unset — not a header problem.
 
+### Environment variables & `.env` (CI / automation)
+
+You don't have to write JSON files at all — `apiKey` and `projectId` also resolve from the environment. The full precedence, highest first, is:
+
+**`--flag` > env var > `.env` > JSON file.**
+
+- Env vars are **`DCUPL_API_KEY`** and **`DCUPL_PROJECT_ID`**.
+- A workspace **`.env`** at the project root is auto-loaded at startup; real environment variables win over `.env` values.
+- `consoleApiUrl` is **file-only** (read from `dcupl.config.json`, not env-overridable).
+
+This makes CI/automation possible without committing (or even creating) `dcupl.secrets.json` — inject `DCUPL_API_KEY` as a secret env var and every cloud-sync command picks it up.
+
 ### `dcupl config set` — create or update credentials
 
 ```bash
@@ -43,7 +55,7 @@ dcupl config set --console-api-url https://internal/api     # set only the URL; 
 dcupl config set --console-api-url "" --yes                 # remove consoleApiUrl from the config
 ```
 
-Writes/updates both files. Preserves unrelated fields in `dcupl.config.json` (paths, upload globs, etc.) **and user comments** (`comment-json` round-trip). `--yes` enables non-interactive mode and errors if `projectId` or `apiKey` are missing from both flags and files.
+Preserves unrelated fields in `dcupl.config.json` (paths, upload globs, etc.) **and user comments** (`comment-json` round-trip). `--yes` enables non-interactive mode and errors if `projectId` or `apiKey` are missing from both flags and files. The `apiKey` lands in `dcupl.secrets.json` if that file already exists, **otherwise it's written to `.env`** (which `config set` also adds to `.gitignore`).
 
 ### `dcupl config get` — inspect current credentials
 
@@ -52,7 +64,7 @@ dcupl config get                  # apiKey redacted as ***last4
 dcupl config get --show-secrets   # full apiKey
 ```
 
-Diagnostic command — runs even if files don't exist (shows `(unset)`). Prints the source file for each field.
+Diagnostic command — runs even if files don't exist (shows `(unset)`). Prints the resolved **source** for each field (`env` vs the specific file), so you can tell whether a value came from `DCUPL_API_KEY`/`.env` or from `dcupl.secrets.json`.
 
 ### Error messages
 
