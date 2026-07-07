@@ -520,7 +520,7 @@ If `dcupl` isn't on PATH, the project's local bin is at `node_modules/.bin/dcupl
 ```bash
 which dcupl 2>/dev/null && echo "use: dcupl"
 test -x ./node_modules/.bin/dcupl && echo "use: ./node_modules/.bin/dcupl"
-test -f /Users/dominikstrasser/Desktop/dcupl/dcupl-cli/dist/index.js && echo "use: node /Users/dominikstrasser/Desktop/dcupl/dcupl-cli/dist/index.js"
+test -f ~/Desktop/dcupl/dcupl-cli/dist/index.js && echo "use: node ~/Desktop/dcupl/dcupl-cli/dist/index.js"
 ```
 
 ## End-to-end example for an agent task

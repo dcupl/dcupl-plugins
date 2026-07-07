@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Repos (absolute paths): SDK = `/Users/dominikstrasser/Desktop/dcupl/dcupl`, CLI = `/Users/dominikstrasser/Desktop/dcupl/dcupl-cli`, skill = `/Users/dominikstrasser/Desktop/dcupl/dcupl-plugins`.
+- Repos (absolute paths): SDK = `~/Desktop/dcupl/dcupl`, CLI = `~/Desktop/dcupl/dcupl-cli`, skill = `~/Desktop/dcupl/dcupl-plugins`.
 - Engine facts (verified, do not re-derive): defaults are `enabled: true`, `required: true`, `nullable: false`, `forceStrictDataType: false`, `validatorHandling: 'loose'`. `'strict'` drops failing values from loaded data; `unique` deletes duplicate values. Validators run per-attribute only (`model.ts:442` reads `property.quality?.validators` directly).
 - Available validators: `email`, `enum`, `pattern`, `min`, `max`, `minLength`, `maxLength`, `startsWith`, `endsWith`, `includes`, `unique`. Each config is `{ value?: any }`; `email`/`unique` ignore the value.
 - The enriched `ModelDefinition.example.json` MUST NOT use model-level `validators` (it must typecheck against both the current broad type and the narrowed type).
@@ -25,8 +25,8 @@
 ### Task 1: Narrow `ModelQualityConfig` in `@dcupl/common` (repo: dcupl)
 
 **Files:**
-- Modify: `/Users/dominikstrasser/Desktop/dcupl/dcupl/packages/common/src/types/model.types.ts:422-461` (the `ModelQualityConfig` and `AttributeQualityConfig` type declarations)
-- Temp (created then deleted): `/Users/dominikstrasser/Desktop/dcupl/dcupl/packages/common/quality-type-check.tmp.ts`
+- Modify: `~/Desktop/dcupl/dcupl/packages/common/src/types/model.types.ts:422-461` (the `ModelQualityConfig` and `AttributeQualityConfig` type declarations)
+- Temp (created then deleted): `~/Desktop/dcupl/dcupl/packages/common/quality-type-check.tmp.ts`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -34,7 +34,7 @@
 
 - [ ] **Step 1: Write the failing type assertion (temp file)**
 
-Create `/Users/dominikstrasser/Desktop/dcupl/dcupl/packages/common/quality-type-check.tmp.ts`:
+Create `~/Desktop/dcupl/dcupl/packages/common/quality-type-check.tmp.ts`:
 
 ```ts
 import type { ModelQualityConfig } from './src/types/model.types';
@@ -57,7 +57,7 @@ export const validatorsRejected: ModelQualityConfig = {
 - [ ] **Step 2: Run tsc to verify it fails**
 
 ```bash
-cd /Users/dominikstrasser/Desktop/dcupl/dcupl && npx tsc --noEmit --strict --skipLibCheck --target es2022 --module esnext --moduleResolution bundler packages/common/quality-type-check.tmp.ts
+cd ~/Desktop/dcupl/dcupl && npx tsc --noEmit --strict --skipLibCheck --target es2022 --module esnext --moduleResolution bundler packages/common/quality-type-check.tmp.ts
 ```
 
 Expected: FAIL with `error TS2578: Unused '@ts-expect-error' directive` (the broad type still permits `validators`, so the suppressed error never fires).
@@ -132,7 +132,7 @@ export type AttributeQualityConfig = {
 - [ ] **Step 4: Run tsc to verify the assertion passes**
 
 ```bash
-cd /Users/dominikstrasser/Desktop/dcupl/dcupl && npx tsc --noEmit --strict --skipLibCheck --target es2022 --module esnext --moduleResolution bundler packages/common/quality-type-check.tmp.ts
+cd ~/Desktop/dcupl/dcupl && npx tsc --noEmit --strict --skipLibCheck --target es2022 --module esnext --moduleResolution bundler packages/common/quality-type-check.tmp.ts
 ```
 
 Expected: PASS (exit 0, no output). If it fails on unrelated resolution errors inside `model.types.ts` imports, fix the tsc flags, not the source.
@@ -140,7 +140,7 @@ Expected: PASS (exit 0, no output). If it fails on unrelated resolution errors i
 - [ ] **Step 5: Verify nothing else in the monorepo breaks**
 
 ```bash
-cd /Users/dominikstrasser/Desktop/dcupl/dcupl && npm run build -w packages/common && npm test
+cd ~/Desktop/dcupl/dcupl && npm run build -w packages/common && npm test
 ```
 
 Expected: build succeeds; full test suite passes (test fixtures only use model-level flags like `required: false` — verified during design — so nothing references the removed capability).
@@ -148,8 +148,8 @@ Expected: build succeeds; full test suite passes (test fixtures only use model-l
 - [ ] **Step 6: Delete the temp file and commit**
 
 ```bash
-rm /Users/dominikstrasser/Desktop/dcupl/dcupl/packages/common/quality-type-check.tmp.ts
-cd /Users/dominikstrasser/Desktop/dcupl/dcupl && git add packages/common/src/types/model.types.ts && git commit -m "fix(common): narrow ModelQualityConfig — validators are per-attribute only
+rm ~/Desktop/dcupl/dcupl/packages/common/quality-type-check.tmp.ts
+cd ~/Desktop/dcupl/dcupl && git add packages/common/src/types/model.types.ts && git commit -m "fix(common): narrow ModelQualityConfig — validators are per-attribute only
 
 The engine ignores model-level quality.attributes.validators (handleValidators
 reads property.quality.validators directly), so the type advertised a capability
@@ -165,9 +165,9 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 2: Register quality schemas + `AttributeQualityConfig` example (repo: dcupl-cli)
 
 **Files:**
-- Modify: `/Users/dominikstrasser/Desktop/dcupl/dcupl-cli/src/functions/schemas/registry.ts:52` (insert after the `Reference` entry, before `AppLoaderConfiguration`)
-- Create: `/Users/dominikstrasser/Desktop/dcupl/dcupl-cli/src/functions/schemas/examples/AttributeQualityConfig.example.json`
-- Test: `/Users/dominikstrasser/Desktop/dcupl/dcupl-cli/src/functions/schemas/registry.spec.ts`
+- Modify: `~/Desktop/dcupl/dcupl-cli/src/functions/schemas/registry.ts:52` (insert after the `Reference` entry, before `AppLoaderConfiguration`)
+- Create: `~/Desktop/dcupl/dcupl-cli/src/functions/schemas/examples/AttributeQualityConfig.example.json`
+- Test: `~/Desktop/dcupl/dcupl-cli/src/functions/schemas/registry.spec.ts`
 
 **Interfaces:**
 - Consumes: `SchemaEntry` shape from `registry.ts` (fields: name, group, kind, package, file, exportPath, exampleFile?, description). The types `ModelQualityConfig`/`AttributeQualityConfig` already exist in the installed `@dcupl/common`'s `dist/esm/types/model.types.d.ts` — no dependency on Task 1 being published.
@@ -197,7 +197,7 @@ describe('schema registry — quality', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd /Users/dominikstrasser/Desktop/dcupl/dcupl-cli && npx vitest run src/functions/schemas/registry.spec.ts
+cd ~/Desktop/dcupl/dcupl-cli && npx vitest run src/functions/schemas/registry.spec.ts
 ```
 
 Expected: FAIL with `missing ModelQualityConfig`.
@@ -250,7 +250,7 @@ Create `src/functions/schemas/examples/AttributeQualityConfig.example.json`:
 - [ ] **Step 5: Run the full schemas test suite**
 
 ```bash
-cd /Users/dominikstrasser/Desktop/dcupl/dcupl-cli && npx vitest run src/functions/schemas
+cd ~/Desktop/dcupl/dcupl-cli && npx vitest run src/functions/schemas
 ```
 
 Expected: PASS, including a NEW auto-generated case in `examples-typecheck.spec.ts` ("AttributeQualityConfig example is assignable to AttributeQualityConfig") — that spec iterates all ts-kind entries with an `exampleFile`, no wiring needed.
@@ -258,7 +258,7 @@ Expected: PASS, including a NEW auto-generated case in `examples-typecheck.spec.
 - [ ] **Step 6: Smoke-test the built CLI**
 
 ```bash
-cd /Users/dominikstrasser/Desktop/dcupl/dcupl-cli && npm run build && node bin/dcupl schemas get AttributeQualityConfig --example
+cd ~/Desktop/dcupl/dcupl-cli && npm run build && node bin/dcupl schemas get AttributeQualityConfig --example
 ```
 
 Expected: prints the type source (including `AttributeValidatorConfig`, `ValidatorConfig`, `ValidatorErrorType` pulled in transitively) followed by the example JSON. Also run `node bin/dcupl schemas list` and confirm both new names appear under Models.
@@ -266,7 +266,7 @@ Expected: prints the type source (including `AttributeValidatorConfig`, `Validat
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Users/dominikstrasser/Desktop/dcupl/dcupl-cli && git add src/functions/schemas/registry.ts src/functions/schemas/registry.spec.ts src/functions/schemas/examples/AttributeQualityConfig.example.json && git commit -m "feat(schemas): register ModelQualityConfig + AttributeQualityConfig with example
+cd ~/Desktop/dcupl/dcupl-cli && git add src/functions/schemas/registry.ts src/functions/schemas/registry.spec.ts src/functions/schemas/examples/AttributeQualityConfig.example.json && git commit -m "feat(schemas): register ModelQualityConfig + AttributeQualityConfig with example
 
 Quality types were only reachable buried inside 'schemas get ModelDefinition'.
 Standalone entries make them discoverable in 'schemas list'.
@@ -279,8 +279,8 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 3: Enrich `ModelDefinition.example.json` with quality usage (repo: dcupl-cli)
 
 **Files:**
-- Modify: `/Users/dominikstrasser/Desktop/dcupl/dcupl-cli/src/functions/schemas/examples/ModelDefinition.example.json`
-- Test: existing `/Users/dominikstrasser/Desktop/dcupl/dcupl-cli/src/functions/schemas/examples-typecheck.spec.ts` (no changes)
+- Modify: `~/Desktop/dcupl/dcupl-cli/src/functions/schemas/examples/ModelDefinition.example.json`
+- Test: existing `~/Desktop/dcupl/dcupl-cli/src/functions/schemas/examples-typecheck.spec.ts` (no changes)
 
 **Interfaces:**
 - Consumes: nothing from other tasks. CONSTRAINT: no model-level `validators` (must typecheck against the currently installed broad `@dcupl/common` AND the Task-1-narrowed type).
@@ -338,7 +338,7 @@ Overwrite `src/functions/schemas/examples/ModelDefinition.example.json` with:
 - [ ] **Step 2: Run the typecheck spec to verify it passes**
 
 ```bash
-cd /Users/dominikstrasser/Desktop/dcupl/dcupl-cli && npx vitest run src/functions/schemas/examples-typecheck.spec.ts
+cd ~/Desktop/dcupl/dcupl-cli && npx vitest run src/functions/schemas/examples-typecheck.spec.ts
 ```
 
 Expected: PASS ("ModelDefinition example is assignable to ModelDefinition").
@@ -346,7 +346,7 @@ Expected: PASS ("ModelDefinition example is assignable to ModelDefinition").
 - [ ] **Step 3: Smoke-test the rendered example**
 
 ```bash
-cd /Users/dominikstrasser/Desktop/dcupl/dcupl-cli && npm run build && node bin/dcupl schemas get ModelDefinition --example
+cd ~/Desktop/dcupl/dcupl-cli && npm run build && node bin/dcupl schemas get ModelDefinition --example
 ```
 
 Expected: output ends with the enriched example including both `quality` blocks.
@@ -354,7 +354,7 @@ Expected: output ends with the enriched example including both `quality` blocks.
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Users/dominikstrasser/Desktop/dcupl/dcupl-cli && git add src/functions/schemas/examples/ModelDefinition.example.json && git commit -m "docs(schemas): show quality rules in the ModelDefinition example
+cd ~/Desktop/dcupl/dcupl-cli && git add src/functions/schemas/examples/ModelDefinition.example.json && git commit -m "docs(schemas): show quality rules in the ModelDefinition example
 
 Model-level flag defaults + per-property validators, matching what the
 engine actually honors.
@@ -367,7 +367,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 4: Skill — "Quality rules & validators" section in model-authoring.md (repo: dcupl-plugins)
 
 **Files:**
-- Modify: `/Users/dominikstrasser/Desktop/dcupl/dcupl-plugins/dcupl/skills/dcupl/references/model-authoring.md` (fix line 75 bullet; append new `##` section at end of file, after "Sanity-check after editing")
+- Modify: `~/Desktop/dcupl/dcupl-plugins/dcupl/skills/dcupl/references/model-authoring.md` (fix line 75 bullet; append new `##` section at end of file, after "Sanity-check after editing")
 
 **Interfaces:**
 - Consumes: schema names `AttributeQualityConfig` / `ModelQualityConfig` from Task 2, exactly as registered.
@@ -447,7 +447,7 @@ After adding rules, re-run `dcupl validate` and compare against the pre-change b
 - [ ] **Step 3: Verify anchors and rendering**
 
 ```bash
-cd /Users/dominikstrasser/Desktop/dcupl/dcupl-plugins && grep -n "Quality rules & validators\|quality.enabled: true" dcupl/skills/dcupl/references/model-authoring.md
+cd ~/Desktop/dcupl/dcupl-plugins && grep -n "Quality rules & validators\|quality.enabled: true" dcupl/skills/dcupl/references/model-authoring.md
 ```
 
 Expected: the new `##` heading appears once; the old "Enable quality rules (`quality.enabled: true`)" phrasing appears **zero** times (the only `quality.enabled` mentions are in the new section's accurate context). Read the section once top-to-bottom for table rendering.
@@ -455,7 +455,7 @@ Expected: the new `##` heading appears once; the old "Enable quality rules (`qua
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Users/dominikstrasser/Desktop/dcupl/dcupl-plugins && git add dcupl/skills/dcupl/references/model-authoring.md && git commit -m "docs(dcupl skill): quality rules & validators — defaults, loose/strict, restrictiveness questions
+cd ~/Desktop/dcupl/dcupl-plugins && git add dcupl/skills/dcupl/references/model-authoring.md && git commit -m "docs(dcupl skill): quality rules & validators — defaults, loose/strict, restrictiveness questions
 
 Fixes the wrong 'enable quality.enabled: true' advice (quality is on by
 default), documents strict-drops-values semantics and the per-attribute-only
@@ -469,7 +469,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 5: Skill — SKILL.md discovery, routing, and error-taxonomy pointers (repo: dcupl-plugins)
 
 **Files:**
-- Modify: `/Users/dominikstrasser/Desktop/dcupl/dcupl-plugins/dcupl/skills/dcupl/SKILL.md` (three surgical edits)
+- Modify: `~/Desktop/dcupl/dcupl-plugins/dcupl/skills/dcupl/SKILL.md` (three surgical edits)
 
 **Interfaces:**
 - Consumes: section heading `## Quality rules & validators` from Task 4; schema names from Task 2.
@@ -514,7 +514,7 @@ with:
 - [ ] **Step 4: Verify anchors**
 
 ```bash
-cd /Users/dominikstrasser/Desktop/dcupl/dcupl-plugins && grep -n "AttributeQualityConfig\|Quality rules & validators\|InvalidValidator (" dcupl/skills/dcupl/SKILL.md
+cd ~/Desktop/dcupl/dcupl-plugins && grep -n "AttributeQualityConfig\|Quality rules & validators\|InvalidValidator (" dcupl/skills/dcupl/SKILL.md
 ```
 
 Expected: one discovery bullet, one routing row, one annotated taxonomy entry.
@@ -522,7 +522,7 @@ Expected: one discovery bullet, one routing row, one annotated taxonomy entry.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/dominikstrasser/Desktop/dcupl/dcupl-plugins && git add dcupl/skills/dcupl/SKILL.md && git commit -m "docs(dcupl skill): route + discovery pointers for quality schemas
+cd ~/Desktop/dcupl/dcupl-plugins && git add dcupl/skills/dcupl/SKILL.md && git commit -m "docs(dcupl skill): route + discovery pointers for quality schemas
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
