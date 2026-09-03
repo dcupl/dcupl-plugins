@@ -4,7 +4,7 @@ All cloud-sync verbs live under the `files` namespace. The three core sync comma
 
 > **TL;DR:** `dcupl files status` to preview, `dcupl files push` / `pull` to sync. Per-file ops (`read`/`write`/`copy`/`move`/`delete`/`list`) and version management (`files versions`) below. Runs inside a workspace only — needs `dcupl.config.json` + `dcupl.secrets.json` (create them with `dcupl config set`, see [Configuring credentials](#configuring-credentials)).
 
-> **Heads up on the legacy commands.** `dcupl files:push` / `files:pull` / `files:copy` / `files:versions` (colon-style) still work but are **deprecated** and print a warning. Prefer the new space-separated form below. The one current caveat: the new `push`/`pull` pair only round-trips text/UTF-8 files. For projects that contain binary files originally uploaded with `files:push`, keep using the legacy pair until binary support lands.
+> **Heads up on the legacy commands.** `dcupl files:push` / `files:pull` / `files:copy` / `files:versions` (colon-style) still work but are **deprecated** and print a warning. Prefer the new space-separated form below. Do **not** reach for the legacy pair to move binary files: the dcupl CDN stores text only, the legacy zip path is extension-filtered server-side, and binary was never actually supported there either. See **What can be synced** under *Incremental sync* below.
 
 ## Configuring credentials
 
@@ -116,6 +116,7 @@ dcupl files push --strict                # also delete server files no longer pr
 dcupl files pull --strict                # also delete local files no longer present on server
 dcupl files push --version staging       # operate against a specific version
 dcupl files push --path models/ --path data/products.csv   # scope to subset
+dcupl files push --concurrency 2         # fewer parallel transfers (slow link / big files)
 ```
 
 **Key flags:**
@@ -124,9 +125,20 @@ dcupl files push --path models/ --path data/products.csv   # scope to subset
 - `--strict` — opt into deletions. Default is **additive** (never deletes). `--strict` combined with `--path` confines deletion to that scope. A `--strict` run prompts before deleting; pass `--yes` to skip (same semantics as the other destructive ops — see **Destructive remote ops** above). For `push --strict` (and delete/move/versions), non-TTY without `--yes` fails fast with `NON_TTY_UNCONFIRMED`. Note `pull --strict` currently lacks that guard — it falls through to an interactive prompt and does **not** emit `NON_TTY_UNCONFIRMED` — so always pass `--yes` for non-interactive pull deletions.
 - `--force` — resolve all conflicts in one direction: `push --force` uploads local over server, `pull --force` overwrites local with server, and `pull --force` also overrides the dirty-workspace version-switch refusal.
 - `--path <glob>` — repeatable. Restricts the operation to a subset of files/folders/globs relative to `baseFolder`. Works on all three of `status`, `push`, and `pull` — so `dcupl files status --path models/` previews exactly the scope a `push --path models/` would transfer. Composes with the config-level `filesUpload.include` / `filesUpload.exclude` rules. Use it when you want to sync only `models/`, only one file, etc.
+- `--concurrency <n>` — max parallel file transfers on `push`/`pull` (default 4, minimum 1). Lower it for very large files or slow links.
 - `--json` — JSON output (default is human-readable).
 
 **Guardrails.** `push` rejects `--version production` — publish there via `files versions copy` instead. `pull` refuses to switch to a different version when the workspace is dirty unless you pass `--force`.
+
+**What can be synced.** The dcupl CDN stores **text files only**, enforced client-side before any request is sent:
+
+- **Allowed extensions:** `.csv`, `.json`, `.txt`, `.md`, `.js` (case-insensitive). `.js` is load-bearing — custom scripts, operators, and transformers ship as `.js` CDN resources. Anything else fails with `UNSUPPORTED_FILE_TYPE`.
+- **UTF-8 only:** a file whose bytes are not valid UTF-8 is rejected rather than uploaded with characters mangled to `U+FFFD`. This applies to `files push` and to `files write --file <local>` alike.
+- A rejected file does **not** abort the rest of the batch — the other files still transfer and the run exits non-zero.
+
+There is no binary escape hatch. If a project needs binary assets, host them elsewhere and reference them by URL.
+
+**Large files.** `push` routes files over 10 MB through a resumable, gzipped upload session (raw bytes never transit the console API) and keeps smaller files on the direct `/write` path — no flag needed. The ceiling is 500 MB, checked pre-flight. Against an older console API that lacks the session endpoint, files up to 90 MB fall back to the direct path and larger ones fail with an upgrade hint.
 
 **Conflict handling.** If both sides changed a file since the baseline, the command reports it as a conflict and skips it — no auto-merge. Re-run with `--force` to resolve all conflicts in one direction, or resolve individual files with `files write` / `files read` and re-run plain sync.
 
