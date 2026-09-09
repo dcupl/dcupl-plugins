@@ -77,7 +77,7 @@ Then summarize what you found and surface 1-2 notable patterns. Skip this for na
 
 - `MODEL_NOT_FOUND` doesn't mean "create the model"; the user might have typo'd a name. Run `app models keys --json` and confirm.
 - `MULTIPLE_APPS` means there's >1 daemon running. Run `app list --json`, ask the user which they meant, or infer from `cwd` if you can.
-- `NETWORK` (daemon unreachable) usually means a stale registry entry. `app list` auto-prunes dead pids — re-run it.
+- `NETWORK` (daemon unreachable) means the registry still lists a daemon whose process is gone (crashed, or killed out-of-band). Crashed entries are kept on purpose so you can inspect them: `app list --json` marks them `status: "crashed"`, `app status --app <id> --json` returns `status: "crashed"` plus `logPath` and a `logTail`, and `app logs --app <id> [--lines N]` prints the daemon's log. Clean up with `app destroy --app <id>` (it tolerates the unreachable daemon and removes the registry entry), then `app create` again.
 - `UNKNOWN_OPTION` / `PARSE_ERROR` / `PROJECTION_INVALID_SHAPE` are your fault — a mistyped flag, a missing argument, or a malformed `--projection`. `UNKNOWN_OPTION` usually carries a "Did you mean …?" hint; re-read the command's option requirements (`--help`).
 - `TYPE_MISMATCH` (only from `fn aggregate`): the user asked for `avg`/`sum` on a non-numeric column. The error message names the column and its current type — fix is `models set` with the right type, then `data set` (full replace) to re-type existing rows.
 
@@ -92,8 +92,8 @@ The CLI can return a well-formed but wrong answer. Before turning a result into 
 - **Row count plausible?** `fn metadata` `currentSize` should match what you expected from the source file. A surprising count usually means a bad `--key-property` (duplicate keys collapse rows) or a partial ingest.
 - **`avg`/`sum` not 0 or undefined?** That's the numeric-types gotcha — the column is `string`/`any`. Fix the model, then re-run; don't report the 0.
 - **`distinct` count sane?** A distinct count equal to the row count on a column you expected to repeat means values aren't matching — check for stray whitespace or inconsistent casing.
-- **Empty filter result?** Before reporting "zero matches", confirm it isn't a `find` pattern that needed slash-delimiters, or a numeric comparison silently running against a string column. **Also check the attribute name against `fn metadata`**: a typo'd attribute in a `--query` filter or `fn facets --attribute` returns a silent `[]` with exit 0 — indistinguishable from zero matches (only `fn groupBy`/`fn aggregate` hard-error on unknown attributes, and with a misleading `INTERNAL` code). The same silent `[]` happens when querying a column that was consumed by `keyProperty` — its values live under `key`, not the original column name.
-- **Group/facet sizes sum to the total?** `fn groupBy` group sizes — and `fn facets` counts — should add up to `currentSize`. The subtlety: an **empty string** (e.g. a blank CSV cell) gets its own real `""` bucket and *does* count toward the total, but a **genuinely missing property** (an absent key in JSON, or a column the model doesn't declare) is silently excluded with no bucket. So a shortfall below `currentSize` signals missing *properties*, not blank cells. Quantify either with `{"operator":"isTruthy","attribute":"<attr>","value":false}` (which catches both empty and missing).
+- **Empty filter result?** Before reporting "zero matches", confirm it isn't a `find` pattern that needed slash-delimiters, or a numeric comparison silently running against a string column. Attribute typos are mostly caught for you: `query execute` (filter, `--sort` and top-level `--projection` attributes), `fn facets`, `fn aggregate` and `fn groupBy` (including `--aggregate` attributes) fail up front with `ATTRIBUTE_NOT_FOUND`, usually carrying a `Did you mean "…"?` suggestion — and, when the name is a column that `--key-property` consumed, a hint that its values now live under `key` (query `key` instead of the original column name). The guard is **not** applied to `fn metadata --query`, `fn pivot` or `fn suggest`: a typo'd attribute there still passes silently (a wrong `currentSize`, an empty pivot, no suggestions), so check those names against `fn metadata` yourself.
+- **Group/facet sizes sum to the total?** `fn groupBy` group sizes — and `fn facets` counts — should add up to `currentSize`. The subtlety: an **empty string** (e.g. a blank CSV cell) gets its own real `""` bucket and *does* count toward the total, but a **genuinely missing property** (an absent key in JSON, or a column the model doesn't declare) is silently excluded with no bucket. So a shortfall below `currentSize` signals missing *properties*, not blank cells. Quantify either with `{"operator":"isTruthy","attribute":"<attr>","value":false}` (which catches both empty and missing). When you deliberately *don't* want such buckets in the breakdown, `fn facets`, `fn groupBy` and `fn aggregate` accept `--exclude-undefineds`, `--exclude-zeros` and `--exclude-unresolved` (the last drops dangling references on dotted attributes).
 
 If a check fails, fix the cause and re-run — don't report a suspect number with a caveat.
 
@@ -118,7 +118,8 @@ dcupl app create --auto-update --json
 
 # 2. Load the CSV. --auto-generate-sample-size 100 lets dcupl walk up to 100 rows when
 #    inferring schema for *this* call — more reliable than the row-1-only default of
-#    --auto-generate-properties. --key-property tells dcupl which column is the unique id.
+#    --auto-generate-properties. --key-property tells dcupl which column is the unique id
+#    (no id column? pass --auto-generate-key instead and dcupl assigns one per record).
 dcupl app data upsert --file /path/to/products.csv --model Product --key-property id \
   --auto-generate-sample-size 100 --json
 # → {"upserted":3,"model":"Product","built":true}
@@ -127,7 +128,7 @@ dcupl app data upsert --file /path/to/products.csv --model Product --key-propert
 
 # Distribution of categories:
 dcupl app fn facets --model Product --attribute category --json
-# → [{"value":"shoes","count":2,"size":2,...},{"value":"hats","count":1,...}]
+# → [{"value":"shoes","count":2},{"value":"hats","count":1}]
 
 # Filtered records:
 dcupl app query execute --model Product --query '{"operator":"eq","attribute":"category","value":"shoes"}' --json
@@ -157,9 +158,9 @@ dcupl app models set --content '{"key":"Item","properties":[{"key":"id","type":"
 some-tool | dcupl app data upsert --content - --model Item --key-property id --json
 ```
 
-`--content` is mutually exclusive with `--file` and `--url`. Pass exactly one. Format is inferred from the first non-whitespace char (`[`/`{` → JSON, else CSV); override with `--format csv|json|ndjson` if needed.
+`--content` is mutually exclusive with `--file` and `--url`. Pass exactly one. For `--file`, the extension decides the format (`.csv`, `.json`, `.ndjson`/`.jsonl`). Otherwise — and always for `--content`/`--url` — the daemon sniffs the first non-whitespace char: `[`/`{` → JSON (NDJSON if the whole payload doesn't parse as one document); anything else **errors** with "Cannot infer format … pass --format". There is no CSV fallback, so inline or piped CSV needs `--format csv` explicitly (`--format csv|json|ndjson`).
 
-## The five analytical verbs — picking the right one
+## The analytical verbs — picking the right one
 
 Read the user's question, then pick:
 
@@ -167,7 +168,10 @@ Read the user's question, then pick:
 |---|---|---|
 | "What values appear in column X, and how often?" | `fn facets` | `--model M --attribute X [--limit 20]` |
 | "What's the min/max/avg/sum of X?" | `fn aggregate` | `--model M --attribute X --types min,max,avg` |
-| "How does X break down by Y?" | `fn groupBy` | `--model M --attribute Y` (sizes per group). Add `--aggregate price:avg` for per-group stats. **One attribute per call** — for X × Y cross-tabs see "Cross-tabs" under Common patterns. |
+| "How does X break down by Y?" | `fn groupBy` | `--model M --attribute Y` (sizes per group). Add `--aggregate price:avg` for per-group stats. **One attribute per call** — for X × Y cross-tabs use `fn pivot` (see "Cross-tabs" under Common patterns). |
+| "X by Y *and* Z" (cross-tab / matrix) | `fn pivot` | `--model M --rows Y --columns Z --values X:avg` |
+| "How are values of X distributed across ranges?" (histogram) | `fn aggregate --bins` | `--model M --attribute X --bins 0-100,100-200,200-` |
+| "Which values of X start with / look like 'foo'?" (typeahead) | `fn suggest` | `--model M --attribute X --value foo [--max 10]` |
 | "How many records match this filter?" | `fn metadata` (with `--query`) or count `query execute` | `--model M --query '{...}'` returns `currentSize` |
 | "Show me records matching this filter, sorted, paginated" | `query execute` | `--model M --query '{...}' --sort price:DESC --limit 10` |
 | "Get a single record by id" | `query one` | `--model M --item-key 123` |
@@ -176,7 +180,9 @@ Read the user's question, then pick:
 
 `fn facets` and `fn aggregate` look similar but answer different questions. Facets = "how many of each value?". Aggregate = "what's the statistical summary of this column?".
 
-`fn aggregate --types` accepts: `distinct,count,sum,avg,min,max,group`.
+`fn aggregate --types` accepts: `distinct,count,sum,avg,min,max,group`. It's optional when `--bins` or `--group-options[-file]` is given (those add `group` automatically); with neither, the call fails with `BAD_INPUT`.
+
+`fn suggest` is typeahead over an attribute's values: `--model M --attribute X --value <prefix>` returns matching values, `--max N` caps them, `--query` scopes the candidate records, and `--relevant-data filtered|all|excludeQuery` controls which records count (`excludeQuery` needs `--exclude-query`/`--exclude-query-file`). Useful to resolve a user's fuzzy spelling of a category or name before building the real filter.
 
 ## Mutating a running daemon — beyond `data upsert`
 
@@ -191,6 +197,13 @@ The `data` namespace has more verbs than `upsert`. Reach for these instead of de
 | `app data reset --model M` | Drop all records for one model; keeps the model definition. |
 
 All stage in manual mode and require `dcupl app build` to be visible to queries. In `--auto-update` mode they apply immediately.
+
+If you know the source up front, `app create --load` does create → `loaders add` → `loaders process` → `build` in one shot, so the app is queryable immediately. The source is picked by flag: `--workspace [--lc-json <path>]` for a local dcupl workspace (`--auto-serve` spawns `dcupl serve` if it isn't running), `--project-id <id> --api-key <key> [--version <id>]` for a Console project (defaults to the draft version), or `--base-url <url> [--loader-file <name>] [--header KEY=VALUE …]` for a custom URL; `--key` names the loader, and `--app-key`/`--env`/`--tag`/`--var` pass through to the process step. If the load step fails, the CLI destroys the half-created daemon and surfaces the original error, so there's nothing to clean up:
+
+```bash
+dcupl app create --load --project-id <id> --api-key <key> --json
+dcupl app create --load --workspace --lc-json dcupl.lc.json --env prod --json
+```
 
 For workspace- or console-loaded apps, the `loaders` namespace lets you swap or re-process sources on a live daemon without recreating it:
 
@@ -218,11 +231,21 @@ dcupl app fn groupBy --model Order --attribute customer \
 
 Each group entry comes back with an `_aggregates` array containing the requested computations. Vastly more efficient than looping `fn aggregate --query` per group.
 
+`fn groupBy` also orders and paginates its groups: `--sort <attr>:ASC|DESC` (e.g. `--sort price:DESC`), `--limit N` and `--start N` (0-based offset). Use these for a top-N of groups instead of pulling every group and trimming client-side.
+
 ## `fn aggregate` flags
 
-- `--types distinct,count,sum,avg,min,max,group` — comma-separated.
+- `--types distinct,count,sum,avg,min,max,group` — comma-separated. Optional when a grouping flag below is present.
+- `--bins 0-100,100-200,200-` — the histogram tool: comma-separated numeric ranges (`from-to`, open-ended `200-` or `-100` allowed) that become `group` buckets; `group` is added to `--types` for you. `--group-options '<json>'` / `--group-options-file <path>` pass a full SDK `groupOptions` object instead (mutually exclusive with `--bins`).
 - `--query '<json>'` — scope the aggregation to a subset (e.g. avg price *of shoes only*).
 - `--include-keys` — when computing `distinct`, include the matching record ids per value. Default is to omit them (the SDK can be expensive on sparse columns; default-compact saves bandwidth).
+- `--distinct-limit N` — cap the number of `distinct` values returned.
+- `--exclude-zeros` / `--exclude-undefineds` / `--exclude-unresolved` — leave those values out of the computation.
+
+```bash
+# Price histogram in three buckets (no --types needed)
+dcupl app fn aggregate --model Product --attribute price --bins 0-50,50-100,100- --json
+```
 
 ## `fn facets` output flags
 
@@ -423,7 +446,7 @@ dcupl app fn facets  --model articles --attribute vendorId.companyName --json
 
 No extra setup — the reference is already declared on the local model. Chain as many hops as the reference graph allows.
 
-> **Note on ordering for dotted-ref facets.** The empty-result regression where `--limit N` returned `[]` for most N (only `--limit 5` worked) was fixed in `dcupl@0c27b58` (#193) — dotted-ref facets now return entries reliably for any `--limit`. Ordering remains iteration-based, same as plain facets; see the "Don't trust the order blindly" note below if you need top-N-by-count.
+> **Note on ordering for dotted-ref facets.** The earlier empty-result regression where `--limit N` returned `[]` for most N (only `--limit 5` worked) is fixed — dotted-ref facets now return entries reliably for any `--limit`. Ordering remains iteration-based, same as plain facets; see the "Don't trust the order blindly" note below if you need top-N-by-count.
 
 ## Common patterns
 
@@ -455,7 +478,7 @@ dcupl app fn aggregate --model M --attribute X --types distinct --json
 dcupl app fn facets --model M --attribute X --sort size-desc --limit 10 --json
 ```
 
-> **For guaranteed top-N-by-count, use `--sort size-desc`.** Without `--sort`, results are returned in inverse-index iteration order (no ordering guarantee) — `--limit N` alone has been observed to return entries whose top is not the true max. Pair `--sort size-desc` with `--limit N` for deterministic top-N: `dcupl app fn facets --model M --attribute X --sort size-desc --limit N --json`.
+> **For guaranteed top-N-by-count, use `--sort size-desc`.** Without `--sort`, results are returned in inverse-index iteration order (no ordering guarantee) — `--limit N` alone has been observed to return entries whose top is not the true max. Pair `--sort size-desc` with `--limit N` for deterministic top-N: `dcupl app fn facets --model M --attribute X --sort size-desc --limit N --json`. For a top-N of *groups* with per-group stats, `fn groupBy --sort <attr>:DESC --limit N` (plus `--start` to page) does the same in one call.
 
 **"Filter then aggregate" — stats on a subset:**
 
@@ -467,19 +490,22 @@ dcupl app fn aggregate --model Product --attribute price --types avg \
 # → avg price *of shoes only*
 ```
 
-**Cross-tabs (X × Y) — loop scoped facets; multi-attribute groupBy does NOT exist:**
+**Cross-tabs (X × Y) — use `fn pivot`:**
 
-`fn groupBy` takes exactly one attribute. `--attribute season --attribute year` (and `--attribute season,year`) both fail with a misleading `{"error":"Attribute not found","code":"INTERNAL"}`. Build two-dimensional breakdowns by looping `fn facets --query` over the values of the smaller dimension:
+`fn groupBy` takes exactly one attribute (`--attribute season --attribute year` fails with `ATTRIBUTE_NOT_FOUND`). For two-dimensional breakdowns use `fn pivot`: row and column dimensions plus at least one `--values <attr>:<type[,type]>` aggregation. `--spec '<json>'` / `--spec-file <path>` take a full SDK `PivotOptions` object instead of the shorthand flags (the two forms are mutually exclusive):
 
 ```bash
-# season × year: one scoped facet call per season value
-for s in Summer Fall Winter Spring; do
-  dcupl app fn facets --model Product --attribute year \
-    --query '{"operator":"eq","attribute":"season","value":"'"$s"'"}' --json
-done
+# season × year, avg price per cell
+dcupl app fn pivot --model Product --rows season --columns year --values price:avg --json
+
+# Per-dimension totals via a :totals suffix, grand totals via --totals; --query scopes the input
+dcupl app fn pivot --model Product --rows season:totals --columns year --values price:avg,sum --totals \
+  --query '{"operator":"eq","attribute":"inStock","value":1}' --json
 ```
 
-Remember each scoped facet excludes blank cells of *both* attributes — reconcile the totals against `currentSize` (see "Sanity-check results").
+`--rows`/`--columns` are repeatable (or comma-separated: `--rows category,inStock`) for more than two dimensions; for counts rather than stats use `:count` as the value type. The JSON response nests one level per dimension — `{"key":"root","rows":[{"key":"season","rows":[{"key":"Summer","values":[…],"columns":[{"key":"year","columns":[{"key":"2024","values":[{"attribute":"price","types":["avg"],"avg":10}]}]}]}]}]}` — so each leaf bucket's `values[]` carries the requested aggregate fields. Without `--json`, a 1-row × 1-column × 1-value pivot renders as a flat table; anything bigger falls back to JSON. (On a CLI too old to have `fn pivot`, loop `fn facets --query` over the smaller dimension's values instead — one scoped facet call per value.)
+
+Remember blank cells: a record with an empty value in *either* attribute lands in no cell — reconcile the totals against `currentSize` (see "Sanity-check results").
 
 **"Multiple datasets in one daemon":**
 
@@ -508,19 +534,18 @@ This is the manual/auto-update trade-off in practice: `--auto-update` is conveni
 - **`--auto-generate-*` lives on both `app create` and `app data <verb>`.** Per-call flag overrides the daemon default (use `--no-auto-generate-properties` to force off). Inference still only runs once per model — later mutations on a model that already has a schema never re-infer.
 - **Ingest into an unknown model is rejected up-front.** If you call `data {upsert,update,set}` on a model that isn't registered yet and isn't going to be auto-inferred, the daemon returns `MODEL_NOT_FOUND` with a hint suggesting `app models set` or one of the `--auto-generate-*` flags. Don't try to "force" the upsert through — fix the call.
 - **`--query` accepts a single condition, an array, or a full group.** The daemon normalizes any of them; for large AND/OR groups, use `--query-file` with a query-group JSON.
-- **`fn groupBy` returns group keys + sizes, not records inside each group.** If you want the records, follow up with `query execute --query` per group.
+- **`fn groupBy` returns group keys + sizes, not records inside each group.** If you want the records, follow up with `query execute --query` per group. To page or rank the groups themselves, use `--sort <attr>:DIR --limit N --start N`.
 - **`--content` for small inline data, `--file` for anything substantial.** Inline payloads have shell-escaping pain at scale; over a few KB, write a temp file or use `--content -` to pipe.
 - **Drop `--json` for table output.** When you're exploring interactively in a terminal, omitting `--json` renders arrays-of-records as ASCII tables. Add `--json` back the moment you start piping into another tool.
-- **Reserved error codes:** `APP_NOT_FOUND`, `MULTIPLE_APPS`, `MODEL_NOT_FOUND`, `MISSING_APP_ID`, `NOT_FOUND`, `UNAUTHORIZED`, `INVALID_RESPONSE`, `NETWORK`, `INTERNAL`, `TYPE_MISMATCH`. Argument-parsing failures have their own finer-grained codes — `UNKNOWN_OPTION` (unrecognized flag, often with a "Did you mean" hint), `PARSE_ERROR` (missing/malformed argument), and `PROJECTION_INVALID_SHAPE` (unparseable `--projection`) — rather than a generic `BAD_INPUT`. Programmatic callers should match on `code`, not `message`.
+- **Reserved error codes:** `APP_NOT_FOUND`, `MULTIPLE_APPS`, `MODEL_NOT_FOUND`, `ATTRIBUTE_NOT_FOUND`, `MISSING_APP_ID`, `NOT_FOUND`, `UNAUTHORIZED`, `INVALID_RESPONSE`, `NETWORK`, `INTERNAL`, `TYPE_MISMATCH`, `BAD_INPUT`. `BAD_INPUT` is for semantically invalid input — mutually exclusive flags passed together (`--file` + `--content`, `--bins` + `--group-options`, `--spec` + `--rows`), a malformed `--aggregate`/`--values`/`--bins` spec, a `--query` that can't be normalized into a query group, or `fn aggregate` with nothing to compute. Argument-*parsing* failures have their own finer-grained codes: `UNKNOWN_OPTION` (unrecognized flag, often with a "Did you mean" hint), `PARSE_ERROR` (missing/malformed argument), and `PROJECTION_INVALID_SHAPE` (unparseable `--projection`). Programmatic callers should match on `code`, not `message`.
 
 ## CLI invocation — finding `dcupl`
 
-If `dcupl` isn't on PATH, the project's local bin is at `node_modules/.bin/dcupl`. Inside the dcupl-cli repo itself, use `node dist/index.js app ...` after `npm run build`.
+If `dcupl` isn't on PATH, the project's local bin is at `node_modules/.bin/dcupl`.
 
 ```bash
 which dcupl 2>/dev/null && echo "use: dcupl"
 test -x ./node_modules/.bin/dcupl && echo "use: ./node_modules/.bin/dcupl"
-test -f ~/Desktop/dcupl/dcupl-cli/dist/index.js && echo "use: node ~/Desktop/dcupl/dcupl-cli/dist/index.js"
 ```
 
 ## End-to-end example for an agent task

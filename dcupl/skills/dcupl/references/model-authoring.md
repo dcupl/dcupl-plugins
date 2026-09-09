@@ -12,7 +12,7 @@
 | `--name <key>` | filename basename, lowercased | Override the model key |
 | `--register` | off | Also writes a `model` + `data` resource pair to `dcupl.lc.json` |
 | `--sample-size <n>` | all rows | Limit rows scanned for type inference |
-| `--key-property <col>` | inferred / prompted | Use this column as the record key — skips key inference and its interactive prompt |
+| `--key-property <col>[,<col>…]` | inferred / prompted | Use this column as the record key — skips key inference and its interactive prompt. Comma-separate columns for a composite `keyProperty` array (`--key-property id,lang`) |
 | `--dry-run` | off | Preview the inferred model (and `--register` resources) without writing anything |
 
 ```bash
@@ -99,7 +99,7 @@ A `Reference` has no `property` field; the `key` *is* the local column. Confusio
 
 ### Rule 2 — Reference keys are string-coerced at join time
 
-The resolver `String()`-coerces both the FK value and the remote keys at join time, so a numeric-string FK (e.g. `"65"`) resolves fine against an `int`-keyed model (key `65`). Mismatched *declared types* alone do not break the join. A `RemoteReferenceKeyNotFound` (carrying `meta.remoteModel` / `meta.remoteKey`) means the key genuinely doesn't exist — almost always because the two sides have different *string representations*: zero-padding, `"65.0"` vs `65`, or stray whitespace.
+The resolver `String()`-coerces both the FK value and the remote keys at join time, so a numeric-string FK (e.g. `"65"`) resolves fine against an `int`-keyed model (key `65`). Mismatched *declared types* alone do not break the join. A `RemoteReferenceKeyNotFound` (carrying `meta.remoteModel` / `meta.remoteKey`) means the key genuinely doesn't exist — almost always because the two sides have different *string representations*: zero-padding, `"65.0"` vs `65`, or stray whitespace. A reference may also set `validity: "strict"` (default `"loose"`): the miss is still reported, but no `{ key, _dcupl_ref_: "miss" }` placeholder is written and the attribute stays unset — use it when downstream code must never see a dangling stub.
 
 Fix at the source by normalizing the key's string form on both sides in their model definitions, or transform the data before load. After fixing, re-run [`dcupl validate`](../SKILL.md#validate-a-workspace) — the errors should disappear.
 
@@ -198,7 +198,7 @@ Leaving both entries in place does not error, but it is the canonical "looks wei
 
 ### Sanity-check after editing
 
-After adding or changing references, re-validate the workspace — [`dcupl validate`](../SKILL.md#validate-a-workspace) loads the loader config in a daemon and surfaces `RemoteReferenceKeyNotFound`, `MissingReference`, and friends (as `ReferenceDataError` warnings). A green result is the only proof the references resolve.
+After adding or changing references, re-validate the workspace — [`dcupl validate`](../SKILL.md#validate-a-workspace) loads the loader config in a daemon and surfaces `RemoteReferenceKeyNotFound` (a dangling key at data level — `errorGroup: ReferenceDataError`) and `MissingReference` (a `derive`/`resolve`/`groupBy` pointing at a reference that doesn't exist — `errorGroup: ModelDefinitionError`, i.e. a broken model, not bad data). A green result is the only proof the references resolve.
 
 ## Quality rules & validators
 
@@ -210,7 +210,7 @@ Per-attribute defaults (no config needed):
 |---|---|---|
 | `required` | `true` | missing value → `UndefinedValue` error |
 | `nullable` | `false` | null value → `NullValue` error |
-| `forceStrictDataType` | `false` | `false` = coerce (`String()` / `parseInt`); `true` = wrong-typed raw value → `WrongDataType` + value dropped |
+| `forceStrictDataType` | `false` | `false` = coerce (`String()` / `parseInt`); a coercion that loses information (`"1.2 lbs"` → `1.2`, `"1.2"` → `1` for `int`) keeps the coerced value **and** reports `WrongDataType` with `meta.lossy: true` / `rawValue` / `coercedValue`. `true` = wrong-typed raw value → `WrongDataType` + value dropped |
 | `validatorHandling` | `'loose'` | `'loose'` = report + keep value; `'strict'` = report + **drop the value from loaded data** |
 
 So an unconfigured model already reports missing/null values (this is why sparse data produces `UndefinedValue` warnings). A `quality` block is for *tuning*: relaxing flags on sparse columns, or adding validators.
