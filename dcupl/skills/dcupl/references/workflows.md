@@ -12,7 +12,11 @@ These make a workflow legible to the user and to whoever maintains it next. None
 
 1. **Plan out loud before you author.** Post a short summary first: list the planned nodes in execution order with one line each on what each does (trigger → fetch → transform → write → respond). It lets the user catch a wrong shape or missing step *before* you write any JSON, and it doubles as the note text in step 3.
 2. **Give the workflow a descriptive note on the canvas.** Every workflow should carry a `ui.notes[]` entry briefly describing what it does — see "Canvas annotations" below for the markdown/size/placement convention. Reuse the plan from step 1 as its body.
-3. **Write script-node code to be read.** A `script` node's JS should be understandable at a glance: a header comment, named helper functions, inline comments where the logic isn't obvious — see "The `script` node sandbox" below.
+3. **Write script-node code to be read — clean, formatted JavaScript.** Descriptive variable names (`cleanedRows`, not `r`), a header comment, named helper functions, inline comments where the logic isn't obvious, 2-space indentation with real line breaks (`\n` inside the JSON string — never a dense one-liner). See "Write the script to be read" below.
+4. **English by default.** Code, comments, node `name`/`description`, port `displayName`s, and canvas notes are written in English unless the user asks for another language.
+5. **Editing an existing workflow? Don't rearrange it.** Keep node ids, the order of `nodes[]` and `edges[]`, every existing `ui.positions` entry, and `ui.notes`. Append new nodes and edges to their arrays and place new nodes next to the node they connect to (use judgment; don't re-layout the canvas). This is correctness, not tidiness: positional fan-in (`$json.at(i)`) follows `edges[]` declaration order, so reordering edges silently changes what a script reads.
+6. **Name what flows — use custom ports.** Where a node has more than one input or output, give the ports meaningful names (`rows`, `summary`, `write-result`) instead of piling everything onto `main`. See "Custom ports — name what flows" below.
+7. **Use `$state` for small side-channel values.** Counters, ids, mode flags, debug/summary info that a later node (typically the response) needs but that isn't part of the data stream go into `$state` instead of extra edges. Row arrays and file contents stay on edges. See "`$state` — the small-value side channel" below.
 
 ---
 
@@ -80,31 +84,119 @@ Every step receives an array of **items**, each `{ json: {...} }`, and emits the
 
     ⚠️ `git-files` resolves its auth/repo fields **once, before the item loop, against an empty item**, because the git client is built a single time per node execution. So `{{variables.*}}` and `{{request.*}}` work there, but `{{$json.*}}` does **not** — a per-item value cannot select the repo or branch. `s3-files`/`azure-files` re-evaluate per item and have no such limit.
   - `{{request.field}}` — a field of the triggering HTTP request. **Which object `request` means depends on the node type:** in a `request` node it is the request **body** (so `{{request.field}}` reads `body.field`); in `dcupl-files`, `s3-files`, `azure-files`, `git-files` and `dcupl-instance` nodes it is the whole request `{ method, headers, query, params, body }`, so there you write `{{request.body.field}}` (or `{{request.query.x}}`). A missing field does NOT resolve to an empty string; the unresolved value poisons whatever config it's templated into (e.g. produces a 4xx-generating URL). Treat trigger-body fields as required and validate them in an early script node.
+  - `{{$state.key}}` — a value an upstream script stored with `$state.set` (nested paths work: `{{$state.summary.rows_total}}`; bare `{{$state}}` stringifies the whole bag). **Runner-version gated:** resolved from the release after `3.0.0-beta.12` (dcupl-workflow-runner#117); older runners leave the token verbatim, which poisons the field like any unresolved placeholder — check `dcupl workflow runners list` before relying on it. See "`$state`" below.
 
 A node's output json becomes the next node's `{{$json}}`. To pass a value downstream, `return` it from a script under a known key, then reference `{{$json.thatKey}}`.
 
-#### Each node sees only its immediate predecessor — fan in to combine
+#### Each node sees only its immediate predecessor — fan in, name ports, or use `$state`
 
 Output does **not** accumulate down the chain. A node reads only what its incoming edge(s) deliver — there is no way to reach back to an earlier node (no `$node`, no `$('name')`, no merged history). Two consequences to plan around:
 
 - **Some step nodes replace the json wholesale.** A `dcupl-files` node emits `{ files: [...], ok }` and drops every upstream key — so a `report` your cleaning script built two nodes back is *gone* by the time a later node runs. (A script returning `{csv, report}` followed by a `dcupl-files` write yields just `{files, ok}` downstream.)
-- **To combine outputs from non-adjacent nodes, fan in.** Wire an edge from *each* source node into the same target node. The target then receives an ordered multi-input collection — `$json.at(0)`, `$json.at(1)`, … in **`edges[]` declaration order** (also `.first()` / `.last()`). Since the order is positional, it's more robust to pick each input **by shape** than by index:
+- **You have three ways to carry a value past such a node.** Pick by the size of the value:
+  1. **`$state`** for small values — a row count, a mode flag, a short summary, the trigger's parameters. Set it in the script that knows it, read it in the response. No extra edge. See "`$state` — the small-value side channel" below.
+  2. **Fan in on named input ports** for real payloads. Wire an edge from *each* source node into the same target node, give each edge its own `target.port` (declared in the target's `inputs[]`), and read each by name with `$json.fromPort("report")`. Deterministic regardless of edge order. See "Custom ports — name what flows" below.
+  3. **Positional fan-in** (`$json.at(0)`, `$json.at(1)`, … in **`edges[]` declaration order**, also `.first()` / `.last()`) is what you get when every edge targets `main`. It works, but it breaks silently when someone reorders edges — prefer named ports for anything you'll maintain.
 
 ```js
-// response node fed by BOTH the dcupl-files write node AND the cleaning script
-const a = $json.at(0), b = $json.at(1);
-const write  = (a && a.files)  ? a : b;   // the write output  { files, ok }
-const report = (a && a.report) ? a : b;   // the script's      { report, ... }
-return { status: 200, body: { ok: write.ok, written: write.files, report: report.report } };
+// Response node fed by the dcupl-files write node (input port "write-result")
+// and by the cleaning script (input port "report").
+const writeResult = $json.fromPort("write-result")[0]; // { files, ok }
+const report = $json.fromPort("report")[0];            // { report, ... }
+
+return {
+  status: 200,
+  body: { ok: writeResult.ok, written: writeResult.files, report: report.report },
+};
 ```
 
-Fan-in is the **only** way to surface a value (a report, a row count, the original request) past a node that rewrites the json — there is no global accumulator to fall back on.
+### Custom ports — name what flows
+
+Every node carries `inputs[]` and `outputs[]`, each entry `{ "type": "<port-name>", "displayName"?: "…", "required"?: true }` (`required` is inputs-only). `type` is the port id an edge refers to; `displayName` is the label the console shows on the handle. Edges name both ends independently — `source.port` on the producer, `target.port` on the consumer — so a script can emit on `summary` and the next node can receive it on `main`, or vice versa. Defaults when you don't declare anything: inputs `[{ type: "main", required: true }]`, outputs `main` + `error`.
+
+Rules the runner and validator enforce (verified in `@dcupl/common-internal`'s `validateEdgePort` and the runner's node executor):
+
+- **`script` nodes may declare any output port; `script` and `response-script` nodes may declare any input port.** Every other node type is locked to its catalog (`request`: `main` / `error` / `client-error` / `server-error` / `timeout`; `dcupl-files`: `main` / `error` / `not-found` / `permission-denied` / `already-exists`; most others `main` / `error`). `dcupl workflow validate` reports an edge on a non-catalog port of a locked node as `port-mismatch`.
+- **Declare the port on the node.** The runner routes purely by the edge's port names, but the console can only draw an edge onto a handle that exists in `inputs[]` / `outputs[]`. Always add the entry, with a `displayName`.
+- **Every custom output port must be wired.** A non-`main` port that produces items but has no consuming edge is promoted to a node error and fails the run. If a branch is sometimes empty, emit an empty array (empty ports are skipped) or don't emit the port at all.
+- **Keep `main` as the primary path**, and don't reuse the runner's error vocabulary for happy-path branches: `error`, `timeout`, `client-error`, `server-error`, `not-found`, `permission-denied`, `already-exists`.
+- **`required: true` on an input** makes the node *skip* (not fail) when its merged input is empty — this is how an upstream failure routed to its `error` port halts the happy path. Mark data inputs required; leave optional side inputs unmarked.
+
+**Producer side** (script): return `$ports({...})` or `_output.route({...})` — a bare object `{ main: [...] }` is *data*, not routing.
+
+```js
+// Split the incoming rows into the ones to persist and a one-item summary
+// for the response node.
+// Expects: $json.first().rows — array of row objects
+// Emits:   port "rows"    → rows to persist
+//          port "summary" → { total, skipped }
+const rows = $json.first().rows;
+const validRows = rows.filter((row) => row.price !== "");
+
+return $ports({
+  rows: validRows,
+  summary: [{ total: rows.length, skipped: rows.length - validRows.length }],
+});
+```
+
+**Consumer side** (script / response-script): `$json.fromPort("summary")` / `$items.fromPort("summary")` read one named input; `$input.ports()` lists the ports that delivered items, `$input.hasPort(name)` / `$input.countByPort(name)` are the guards.
+
+Node and edge declarations for the example (the `write` node is a plain `dcupl-files` on `main`):
+
+```json
+{ "id": "split", "type": "script", "nodeClass": "step",
+  "inputs":  [ { "type": "main", "required": true } ],
+  "outputs": [ { "type": "rows",    "displayName": "Rows to write" },
+               { "type": "summary", "displayName": "Summary" },
+               { "type": "error",   "displayName": "Error" } ], "config": { "script": "…" } },
+{ "id": "respond", "type": "response-script", "nodeClass": "response",
+  "inputs":  [ { "type": "write-result", "displayName": "Write result", "required": true },
+               { "type": "summary",      "displayName": "Summary" } ], "config": { "script": "…" } }
+```
+```json
+{ "id": "e-split-write",   "source": { "nodeId": "split", "port": "rows" },    "target": { "nodeId": "write",   "port": "main" } },
+{ "id": "e-split-respond", "source": { "nodeId": "split", "port": "summary" }, "target": { "nodeId": "respond", "port": "summary" } },
+{ "id": "e-write-respond", "source": { "nodeId": "write", "port": "main" },    "target": { "nodeId": "respond", "port": "write-result" } }
+```
+
+### `$state` — the small-value side channel
+
+`$state` is a per-run key/value bag shared by every `script` and `response-script` node of one execution: `get(key, default)`, `set`, `has`, `delete`, `clear`, `keys`, `values`, `entries`. Use it to hand small facts to a node that is *not* the next in line — typically the response, or a summary/debug step — without drawing an edge for them.
+
+How it actually behaves (verified in the runner's isolate executor):
+
+- **Per execution, not persistent.** The bag is created fresh for every run and discarded afterwards. It is not a cache across runs.
+- **Copied in, copied out.** Before a script runs, the bag is copied into the sandbox as a plain object; after it finishes, the whole object is copied back and *replaces* the bag. Values must be JSON-serializable, and every script node pays the copy cost — so keep it small: scalars, ids, counts, mode flags, short summaries, the trigger's parameters. **Never** row arrays, CSV strings, or file contents — those belong on edges.
+- **Scripts write it; templates can read it.** `script` / `response-script` nodes get the `$state` object; `request`, `dcupl-files`, `s3-files`, `azure-files`, `git-files` and `dcupl-api` configs read it through `{{$state.key}}` (runner releases after `3.0.0-beta.12` — dcupl-workflow-runner#117; on older runners return the value into `$json` and template `{{$json.key}}` instead). `dcupl-instance` scripts don't get it at all.
+- **Readers must be downstream of writers.** Nodes run in topological order; a sibling in the same layer is not guaranteed to see your write.
+- **Keys are flat `snake_case`** strings, like variables: `rows_total`, `rows_skipped`, `mode`, `debug_notes`.
+- **Traces snapshot it** before and after every node (`dcupl workflow trace`), which makes it a cheap debugging channel; a single-node test can seed it with `--state state.json`.
+
+```js
+// transform node — record what happened for the response; the data stays on the edge
+$state.set("rows_total", allRows.length);
+$state.set("rows_skipped", allRows.length - cleanedRows.length);
+return { csv: _csv.fromJSON(cleanedRows, { headers: outputHeaders }) };
+```
+```js
+// response-script — fed only by the dcupl-files write; the counts come from $state
+const writeResult = $json.first();
+
+return {
+  status: 200,
+  body: {
+    ok: writeResult.ok,
+    written: writeResult.files.map((file) => file.path),
+    rows: { total: $state.get("rows_total", 0), skipped: $state.get("rows_skipped", 0) },
+  },
+};
+```
 
 ### The `script` node sandbox
 
 Script runs in an isolated VM — not plain Node. The available globals are a curated set:
 
-- **I/O:** `$json.first()` / `$json.last()` / `$json.at(i)` (and `$items()` / `$json()` for the full input array); `$input`, `$context`, `$state` as listed under "How data flows"; `return value` → `main` port; `throw new Error(...)` → `error` port; `return _output.route({ portA: [...], portB: [...] })` (or `$ports({...})`) for explicit multi-port routing.
+- **I/O:** `$json.first()` / `$json.last()` / `$json.at(i)` (and `$items()` / `$json()` for the full input array); `$json.fromPort(name)` / `$items.fromPort(name)` for one named input port; `$input`, `$context`, `$state` as listed under "How data flows" and "`$state`"; `return value` → `main` port; `throw new Error(...)` → `error` port; `return _output.route({ portA: [...], portB: [...] })` (or `$ports({...})`) for explicit multi-port routing — see "Custom ports".
 - **Helpers are namespaced** (this is the part that surprises people — they are NOT bare functions):
   - `_csv` — `toJSON(csvString)`, `fromJSON(rows, { headers, delimiter })`, `headers(csv)`, `validate(...)`. `toJSON` parses (handles quoting/escaping); `fromJSON` serializes (escapes fields; pass an explicit `headers` array to fix column order or drop columns).
   - `_json` — `distinct`, `groupBy`, `flatten`, `unflatten`, `merge`, `pick`, `omit`, `toCSV`, `parse`, `stringify`
@@ -127,23 +219,36 @@ Script-node code lives inside a JSON string and runs out of sight on a runner, s
 - **Open with a header comment** stating what the script does, what it **expects** on its input port (the shape of `$json.first()` / `$items()`), and what it **returns** (the keys downstream nodes will read). This is the one comment that pays for itself every time someone opens the node.
 - **Extract named helper functions** for distinct steps (parse, validate, transform, serialize) instead of one long block — they read as a table of contents for the logic.
 - **Comment the non-obvious** — why a field is coerced, which port a `_output.route` branch feeds, any assumption about the upstream shape.
+- **Name things for the reader.** `cleanedRows`, `outputHeaders`, `writeResult` — not `r`, `a`, `tmp`. Single-letter names only as trivial loop indices.
+- **Format it like a source file.** 2-space indentation, one statement per line, blank lines between steps. The script lives in a JSON string, so line breaks are `\n` — that is fine, the console editor renders them. Never collapse a script into one line to "save space".
+- **English** identifiers and comments, unless the user asks for another language.
 
 ```js
 // Clean articles: parse the incoming CSV, drop rows with no price,
 // round prices to 2 decimals, and emit the cleaned CSV.
 // Expects: $json.first().files[0].data — raw CSV string from the dcupl-files read.
 // Returns: { csv } — cleaned CSV string for the next dcupl-files write.
-const raw = $json.first().files[0].data;
+// State:   rows_total / rows_skipped — read by the response node.
+const rawCsv = $json.first().files[0].data;
+const outputHeaders = ["id", "name", "price"];
 
-function parse(csv) { return _csv.toJSON(csv); }
-function clean(rows) {
-  return rows
-    .filter((r) => r.price !== "")                 // skip price-less rows
-    .map((r) => ({ ...r, price: Number(r.price).toFixed(2) }));
+function parseCsv(csvString) {
+  return _csv.toJSON(csvString);
 }
 
-const headers = ["id", "name", "price"];
-return { csv: _csv.fromJSON(clean(parse(raw)), { headers }) };
+function cleanRows(rows) {
+  return rows
+    .filter((row) => row.price !== "") // skip price-less rows
+    .map((row) => ({ ...row, price: Number(row.price).toFixed(2) }));
+}
+
+const allRows = parseCsv(rawCsv);
+const cleanedRows = cleanRows(allRows);
+
+$state.set("rows_total", allRows.length);
+$state.set("rows_skipped", allRows.length - cleanedRows.length);
+
+return { csv: _csv.fromJSON(cleanedRows, { headers: outputHeaders }) };
 ```
 
 ### The `request` node — output shape and `autoParse`
@@ -195,7 +300,7 @@ The node's output `files[]` then has one `{ action, path, ok, status }` entry pe
 trigger-request → dcupl-files(read) → script(transform) → dcupl-files(write) → response-script
 ```
 - **read:** `{ "action": "read", "path": "data/articles.csv" }`
-- **script:** `const raw = $json.first().files[0].data; const rows = _csv.toJSON(raw); /* …transform… */ return { csv: _csv.fromJSON(rows, { headers }) };`
+- **script:** the "Write the script to be read" example above — parse `$json.first().files[0].data`, transform, `return { csv }` (and stash counts in `$state` for the response). Never ship it as a one-liner.
 - **write:** `{ "action": "write", "path": "data/articles.cleaned.csv", "content": "{{$json.csv}}" }`
 - **response:** `return { status: 200, body: { ok: $json.first().ok, written: $json.first().files } };`
 
@@ -450,3 +555,8 @@ See `references/cloud-sync.md` for the full file-sync reference.
 - **Reaching for bare `csvToJson`/`jsonToCsv` in a script node.** They aren't in the sandbox — use the namespaced `_csv.toJSON` / `_csv.fromJSON` (see "Authoring node logic").
 - **Confusing the two apiKeys.** `dcupl-files` `auth.apiKey` is a project *workflow* key, not the console UUID in `dcupl.secrets.json`. A 403 on a files node almost always means the wrong key. Prefer `{{variables.dcupl_api_key}}` and the question doesn't arise.
 - **Leaving a credential field empty "for the user to fill in later".** Deploy is now gated on unsatisfied `{{variables.x}}` references — missing *or* empty both block. An empty field yields an undeployable workflow, not a fixable one.
+- **Routing to a custom output port nobody consumes.** A non-`main` port with items and no outgoing edge is promoted to an error and fails the run. Wire every port you emit (see "Custom ports").
+- **Reordering `nodes[]` / `edges[]` or moving `ui.positions` while editing an existing workflow.** Edge order drives positional fan-in (`$json.at(i)`), and the user's canvas layout is theirs. Append, don't rearrange.
+- **Putting payloads in `$state`.** It is copied into and out of every script isolate; keep it to scalars and short summaries. Rows and file contents travel on edges.
+- **Using `{{$state.x}}` in a config against an old runner.** Template support for `$state` landed after runner `3.0.0-beta.12` (dcupl-workflow-runner#117); an older runner leaves the token verbatim and the field is poisoned. If the project's runner is older, return the value from a script into `$json` and template `{{$json.x}}`.
+- **Dense, cryptic script code.** Scripts are read from a trace at 2am. Descriptive names, comments, real line breaks, English — see "Write the script to be read".
