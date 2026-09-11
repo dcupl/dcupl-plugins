@@ -27,6 +27,7 @@ These make a workflow legible to the user and to whoever maintains it next. None
 | `data-mapper` | `DataMapperStepConfig` | `dcupl schemas get DataMapperStepConfig --example` | Field-mapping: origin→target mappings, optional model. |
 | `dcupl-instance` | `DcuplInstanceStepConfig` | `dcupl schemas get DcuplInstanceStepConfig` | Loads a dcupl instance for in-workflow querying. |
 | `dcupl-files` | `DcuplFilesStepConfig` | `dcupl schemas get DcuplFilesStepConfig` | Read/write files in dcupl cloud storage. |
+| `dcupl-api` | `DcuplApiStepConfig` | *not in `dcupl schemas` yet* — see below | Calls the dcupl console API with the runner's own credentials: send mail, fetch a run digest, list recent runs. |
 | `s3-files` | `S3FilesStepConfig` | `dcupl schemas get S3FilesStepConfig` | Read/write objects in an S3 bucket. |
 | `azure-files` | `AzureFilesStepConfig` | `dcupl schemas get AzureFilesStepConfig` | Read/write blobs in Azure storage. |
 | `git-files` | `GitFilesStepConfig` | `dcupl schemas get GitFilesStepConfig` | Read/write files in a git repository. |
@@ -188,6 +189,34 @@ Each `files[]` entry also carries `errorPort`, `error` (the server's message on 
 ]
 ```
 The node's output `files[]` then has one `{ action, path, ok, status }` entry per write. (The same applies to batching reads, deletes, moves, and copies in one node.)
+
+### `dcupl-api` — mail, run digests, run lists
+
+Added in `@dcupl/common-internal` 2.0.0-beta.14 (dcupl/dcupl#254). The node calls
+the console API with the **runner's own credentials**, so its config carries no
+`auth` block at all. Config is a union discriminated on `operation`:
+
+| `operation` | Fields | Emits |
+|---|---|---|
+| `email` | `to` (comma-separated addresses or a JSON array string), `subject`, and at least one of `text` / `html` — all templated | the send result |
+| `digest` | `period` (`daily` \| `weekly`), `timezone` (IANA, e.g. `Europe/Vienna`) | the project's run digest for the closed period: `{ projectId, period, totals, workflows, topErrors, generatedAt }` |
+| `executions` | optional `status[]` (`completed` \| `failed` \| `cancelled`), `sinceHours` (default 24, max 720), `limit` (default 100, max 500) | the project's recent workflow runs |
+
+Output ports are `main`, `error`, and `permission-denied` (401/403 — the runner
+key cannot act for this project). Wire `permission-denied` if you want to handle
+it, same as on `dcupl-files`.
+
+**Digests are plain workflows, not a rule setting.** A daily/weekly summary is a
+`trigger-cron` → `dcupl-api`(digest) → `script`(format) → `dcupl-api`(email)
+pipeline; reporting rules only fire on run events (`run-failed`,
+`run-completed`, `workflow-recovered`). The console ships "Daily digest to mail"
+and "Daily digest to Slack" templates — start from one of those.
+
+**The per-node schema is not in `dcupl schemas` yet.** The CLI's schema registry
+is hand-maintained and has no `DcuplApiStepConfig` entry, so
+`dcupl schemas get DcuplApiStepConfig` fails today; `dcupl schemas get WorkflowNode`
+only shows it once the CLI pins a beta that ships the node. Until then, author
+from the table above or copy a deployed workflow.
 
 ### Worked skeleton — read a CSV, transform, write a variant
 
