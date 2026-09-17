@@ -22,6 +22,7 @@ Cloud-sync commands need three pieces of config split across two files at the pr
 
 - **`projectId`** (required) — the dcupl console project the workspace syncs against.
 - **`consoleApiUrl`** (optional) — overrides the console API base URL. Defaults to the production endpoint when omitted; set it explicitly only for self-hosted or `localhost` instances (primarily a dcupl-internal-dev concern). Not scaffolded by default — discover it via `dcupl config set --help`, the interactive `dcupl config set` prompt, or `dcupl schemas get DcuplCliConfig --example`.
+- **`cdnBaseUrl`** (optional, CLI 1.4.0-beta.4+) — CDN host used by `dcupl app create --load --source remote`, `app loaders add` and `validate --source remote`. Precedence: `--cdn-base-url` flag > `DCUPL_CDN_BASE_URL` env > this key > a known-host mapping from `consoleApiUrl` (`api.dcupl.com` → `cdn.dcupl.com`, `dev.api.dcupl.com` → `dev-cdn.dcupl.com`) > the SDK's prod default. Only needed for self-hosted / unusual hosts; the dev console maps automatically once `consoleApiUrl` is `https://dev.api.dcupl.com`. `dcupl config set` has no prompt or flag for it — edit `dcupl.config.json` or use the env/flag. A non-dcupl host prints a warning because the SDK then sends no api key and no cache-buster.
 - **`loaderPath`**, **`baseFolder`**, plus optional `modelsBasePath`, `dataBasePath`, `filesUpload.{include,exclude}` — paths the CLI walks for uploads.
 
 **`dcupl.secrets.json`** — API key only, **add to `.gitignore`**:
@@ -43,6 +44,7 @@ You don't have to write JSON files at all — `apiKey` and `projectId` also reso
 - Env vars are **`DCUPL_API_KEY`** and **`DCUPL_PROJECT_ID`**.
 - A workspace **`.env`** at the project root is auto-loaded at startup; real environment variables win over `.env` values.
 - `consoleApiUrl` is **file-only** (read from `dcupl.config.json`, not env-overridable).
+- `cdnBaseUrl` IS env-overridable (`DCUPL_CDN_BASE_URL`) and flag-overridable (`--cdn-base-url`).
 
 This makes CI/automation possible without committing (or even creating) `dcupl.secrets.json` — inject `DCUPL_API_KEY` as a secret env var and every cloud-sync command picks it up.
 

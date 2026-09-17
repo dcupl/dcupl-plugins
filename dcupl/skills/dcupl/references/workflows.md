@@ -52,8 +52,8 @@ Runners enforce hard budgets (sourced from the console `WORKFLOWS_RUNTIME` featu
 
 | Limit | Default | Meaning |
 |---|---|---|
-| `workflowTimeout` | 10 000 ms | The whole run — and it INCLUDES ~2–3s of process-spawn/serialization overhead, so the real node budget is ~7–8s |
-| `requestTimeout` | 5 000 ms | A single `request` node's fetch |
+| `workflowTimeout` | 10 000 ms | The whole run. Runner 3.0.0-beta.14+ (dcupl-workflow-runner#82/#85) grants the **full** budget and only then a 3 s grace before the hard kill; older runners stopped ~3 s early because spawn/serialization overhead ate into it, so budget ~7–8 s of node time there |
+| `requestTimeout` | 5 000 ms | A single `request` node's fetch — on beta.14+ this also bounds reading/parsing the response body, so a slow-trickling body now lands on the `timeout` port instead of overrunning |
 | `scriptTimeout` | 500 ms | A single `script` node. isolated-vm is far slower than native Node — a transform that takes 80ms locally can blow this, and the same script can pass one run and fail the next (shared-runner CPU variance) |
 | `workflowWorkers` | 1 | Nodes execute **sequentially** — parallel edges do NOT buy wall-clock time |
 
@@ -64,7 +64,7 @@ Design consequences for payloads beyond ~1MB:
 - **Parse at the fetch, not in a script.** A `request` node with `autoParse: true` parses CSV/JSON natively inside the request node (outside any script budget). Piping a multi-MB CSV string through `_csv.toJSON` inside a 500ms script budget will not survive.
 - **Cut volume at the source.** E.g. a published Google-Sheet CSV URL accepts a `range` parameter (`…&range=C1:E44447` — header row inclusive) to fetch only the columns/rows you need.
 - **Split big jobs across runs.** Drive one deployment with a trigger-body parameter (mode / range) and trigger it N times, instead of one mega-pipeline. Multi-port routing from a script (`_output.route`) pairs well with this.
-- **Timeout attribution is misleading.** A node killed by the *workflow* clock is still labeled "Node execution timed out", and traces can show a total duration well under the advertised limit (spawn overhead is invisible). When a run dies early, compare trace durations against the table above before blaming the node.
+- **Timeout attribution.** On runner 3.0.0-beta.14+ a run stopped by the workflow clock is reported as a **failed** run (not `completed`) and the timed-out node's error names the budget (`Workflow timeout of Nms (runtime.workflowTimeout)`) plus, for a `dcupl-files` node, its per-file ledger — read that before blaming the node. On older runners a node killed by the *workflow* clock is still labeled "Node execution timed out" and traces can show a total duration well under the advertised limit (spawn overhead is invisible); compare trace durations against the table above.
 
 ---
 
@@ -92,7 +92,7 @@ A node's output json becomes the next node's `{{$json}}`. To pass a value downst
 
 Output does **not** accumulate down the chain. A node reads only what its incoming edge(s) deliver — there is no way to reach back to an earlier node (no `$node`, no `$('name')`, no merged history). Two consequences to plan around:
 
-- **Some step nodes replace the json wholesale.** A `dcupl-files` node emits `{ files: [...], ok }` and drops every upstream key — so a `report` your cleaning script built two nodes back is *gone* by the time a later node runs. (A script returning `{csv, report}` followed by a `dcupl-files` write yields just `{files, ok}` downstream.)
+- **Some step nodes replace the json wholesale.** A `dcupl-files` node emits `{ files: [...], ok }` (one entry per file op; `ok` is false as soon as any op failed — a multi-file write is **not atomic**: earlier files stay committed, later ones are still attempted, nothing is rolled back; on runner 3.0.0-beta.14+ the node state's `details.files[]` ledger and any timeout/error message spell out which file was committed / interrupted / not attempted — dcupl-workflow-runner#84) and drops every upstream key — so a `report` your cleaning script built two nodes back is *gone* by the time a later node runs. (A script returning `{csv, report}` followed by a `dcupl-files` write yields just `{files, ok}` downstream.)
 - **You have three ways to carry a value past such a node.** Pick by the size of the value:
   1. **`$state`** for small values — a row count, a mode flag, a short summary, the trigger's parameters. Set it in the script that knows it, read it in the response. No extra edge. See "`$state` — the small-value side channel" below.
   2. **Fan in on named input ports** for real payloads. Wire an edge from *each* source node into the same target node, give each edge its own `target.port` (declared in the target's `inputs[]`), and read each by name with `$json.fromPort("report")`. Deterministic regardless of edge order. See "Custom ports — name what flows" below.
