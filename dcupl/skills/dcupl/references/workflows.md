@@ -214,8 +214,7 @@ and "Daily digest to Slack" templates — start from one of those.
 
 **The per-node schema is not in `dcupl schemas` yet.** The CLI's schema registry
 is hand-maintained and has no `DcuplApiStepConfig` entry, so
-`dcupl schemas get DcuplApiStepConfig` fails today; `dcupl schemas get WorkflowNode`
-only shows it once the CLI pins a beta that ships the node. Until then, author
+`dcupl schemas get DcuplApiStepConfig` fails. Until the CLI adds that entry, author
 from the table above or copy a deployed workflow.
 
 ### Worked skeleton — read a CSV, transform, write a variant
