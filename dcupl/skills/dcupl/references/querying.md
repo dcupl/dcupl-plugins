@@ -353,15 +353,22 @@ The daemon wraps this into a full query group automatically.
 | `typeof` | value type check | `{"operator":"typeof","attribute":"x","value":"string"}` |
 | `isTruthy` | truthy/falsy | `{"operator":"isTruthy","attribute":"x","value":true}` |
 | `size` | array size | `{"operator":"size","attribute":"tags","value":3}` |
+| `in` | equals **any** listed value (SDK ≥ 2.0.0-beta.21) | `{"operator":"in","attribute":"status","value":["active","paused"]}` |
 
 `gt`/`lt` etc. require a numeric column (see "numeric-types gotcha" above).
+
+**Any-of:** `eq` with an array value compares the *whole* array, so `{"operator":"eq","attribute":"status","value":["a","b"]}` matches nothing on a string column. Use `in` (SDK ≥ 2.0.0-beta.21), or on older SDKs an `or` group with one `eq` per value. `in` uses `eq`'s equality, `"options":{"invert":true}` makes it NOT IN, and an empty list matches nothing.
+
+**Every condition takes `options`:** `invert` (NOT — on SDK ≥ 2.0.0-beta.21 it applies to every operator; older SDKs ignored it for `gt`/`lt`/`size`/`isTruthy`), `transform` (`["lowercase","trim","removeWhitespace"]`, applied to both sides) and `arrayValueHandling` (`"some"` default / `"every"`) for array values. On SDK ≥ 2.0.0-beta.21 array values include dotted paths through a multi-valued reference (`memberships.role` compares every membership's role) and answer correctly on a cold daemon; `every` needs at least one value.
+
+**Which SDK does the daemon run?** The daemon bundles its own `@dcupl/core`; check `dcupl --version` / the CLI's `package.json`. As of 2026-09-29 the CLI bundles 2.0.0-beta.20, so `in`, `regexFlags` and the array-value fixes above need a CLI release that bundles beta.21.
 
 **Filter for null/empty values:** `{"operator":"isTruthy","attribute":"x","value":false}` matches `null`, `undefined`, empty string, and `0` (anything JS-falsy). There is no dedicated `isNull`/`isEmpty` operator — `isTruthy:false` is the canonical pattern.
 
 **`find` has two modes** depending on the `value` shape:
 
 - **Bare string** (e.g. `"Sneaker"`) — **exact-equality** match against the *whole* field value, NOT a substring. `find` with `"Ball"` does **not** match `"Soccer Ball"` — it returns `[]`. The characters `^`, `$`, `.`, etc. are not metacharacters here. **For substring matching, you must use a slash-delimited regex.**
-- **Slash-delimited regex** (e.g. `"/^Sneaker/"`, `"/foo/i"`) — treated as a JS-style regex *literal*. Anchors, flags, and substring patterns work as you'd expect.
+- **Slash-delimited regex** (e.g. `"/^Sneaker/"`) — the text between the slashes is a JS regex. Anchors and substring patterns work as you'd expect. **Flags are not read from the value:** `"/foo/i"` is a bare string (exact match). For case-insensitive matching use `"options":{"regexFlags":"i"}` (SDK ≥ 2.0.0-beta.21), e.g. `{"operator":"find","attribute":"name","value":"/sneaker/","options":{"regexFlags":"i"}}`; on older SDKs use `"options":{"transform":["lowercase"]}` with a lower-cased pattern.
 
 This means `value: "M"` only matches a field whose entire value is exactly `M`, `value: "/^M/"` matches any field *starting with* `M`, and `value: "/Ball/"` matches any field *containing* `Ball` (e.g. `Soccer Ball`, `Rugby Ball`). If a `find` returns zero unexpectedly, the usual cause is using a bare string where you needed a `/regex/` for substring/pattern matching.
 
