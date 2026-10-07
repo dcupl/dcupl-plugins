@@ -65,7 +65,7 @@ dcupl app fn metadata --model X --json   # row count + attribute list
 Then pick the few attributes that matter — relevant to the user's question, or the most informative columns for a wide dataset (cap ~5). Don't fan out over every column; that floods context with data nobody asked for.
 
 ```bash
-dcupl app fn facets --model X --attribute <attr> --limit 5 --json
+dcupl app fn facets --model X --attribute <attr> --sort size-desc --limit 5 --json
 dcupl app fn aggregate --model X --attribute <attr> --types distinct --json
 ```
 
@@ -263,8 +263,8 @@ Examples:
 dcupl app fn facets --model Order --attribute customerId --json
 # → [{"value":"alice","count":42},...]
 
-# Top 10:
-dcupl app fn facets --model Order --attribute customerId --limit 10 --json
+# Top 10 by count (--limit alone is not a top-N; pair it with --sort size-desc):
+dcupl app fn facets --model Order --attribute customerId --sort size-desc --limit 10 --json
 
 # Compact + ids per value (for follow-up queries):
 dcupl app fn facets --model Order --attribute customerId --include-results --json
