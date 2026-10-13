@@ -20,12 +20,21 @@ These make a workflow legible to the user and to whoever maintains it next. None
 
 ---
 
+## Template file — fields
+
+`{ key, config: { version: "3", nodes, edges }, name?, description?, version?, variables?, ui? }`. `key` deploys as `<projectId>-<key>` (4–49 chars of `a-z A-Z 0-9 _ -`); `version` is a free label; `ui` (`positions`, `notes`) is editor-only.
+
+- **Node:** `id`, `name?`, `description?`, `nodeClass` (`trigger` | `step` | `response`), `type`, `inputs`, `outputs`, `config`. `inputs`/`outputs` are **required arrays** (`validate` fails with `expected array, received undefined`); triggers have `inputs: []`, responses `outputs: []`. Steps also take `merge` (combines several input ports; needs ≥ 2, `merge-by-key` needs `key`) and `skip: true` (runs nothing, sends nothing on).
+- **Edge:** `id`, `source: { nodeId, port }`, `target: { nodeId, port }`.
+- **`variables`:** `[{ name, value, description }]`, resolved **at deploy** — deploy overrides > project variables (Global Workflow Variables) > the template's own — so redeploy after changing one. Read with `{{variables.name}}` in config, `$context.variables.name` in scripts.
+- **Accepted but ignored by the runner** (leave out): edge `condition` / `transform` / `config.bufferSize` (an edge holds up to 1,000,000 items regardless), node `executionMode` / `batchSize` (every node takes its whole input at once), `merge.timeout`, and the template's `config.catch` (a workflow-wide error node — route errors through each node's `error` port instead).
+
 ## Node-type catalog
 
 | `type` in JSON | Config schema | Schema command | Purpose |
 |---|---|---|---|
-| `trigger-request` | `TriggerRequestConfig` | `dcupl schemas get TriggerRequestConfig --example` | HTTP trigger: `path`, `methods[]`, optional `auth`. |
-| `trigger-cron` | `TriggerCronConfig` | `dcupl schemas get TriggerCronConfig` | Cron trigger: `cronTime` (cron expression), optional `timezone`. |
+| `trigger-request` | `TriggerRequestConfig` | `dcupl schemas get TriggerRequestConfig --example` | HTTP trigger: `path` (`:name` segments → `request.params.name`), `methods[]`, optional `auth: [{ "type": "api-key", "value": "<api-key-uid>" }]` (deploy resolves the uid to the key; none/empty = open). |
+| `trigger-cron` | `TriggerCronConfig` | `dcupl schemas get TriggerCronConfig` | Cron trigger: `cronTime` (5 fields, or 6 with seconds), optional `timezone` (default UTC). |
 | `request` | `RequestStepConfig` | `dcupl schemas get RequestStepConfig --example` | Outbound HTTP call: url, method, body, headers, autoParse, responseType. |
 | `script` | `ScriptStepConfig` | `dcupl schemas get ScriptStepConfig --example` | User code in isolated sandbox. Config field is **`script`** (a string of code). |
 | `data-mapper` | `DataMapperStepConfig` | `dcupl schemas get DataMapperStepConfig --example` | Field-mapping: origin→target mappings, optional model. |
@@ -41,7 +50,7 @@ These make a workflow legible to the user and to whoever maintains it next. None
 To see the discriminated-union of all node shapes in one place: `dcupl schemas get WorkflowNode`.
 
 > **Critical field names:**
-> - `script` and `response-script` nodes: the code field is **`script`**, NOT `code`.
+> - `script`, `response-script` and `dcupl-instance` nodes: the code field is **`script`**, NOT `code`.
 > - `response-status` nodes: `config` must be `{}` — the HTTP status is derived from completion state; there are no configurable fields.
 > - `trigger-cron`: `cronTime` (not `cron`, not `expression`) + optional `timezone`.
 
@@ -49,14 +58,17 @@ To see the discriminated-union of all node shapes in one place: `dcupl schemas g
 
 ## Runtime limits — design within the envelope BEFORE authoring
 
-Runners enforce hard budgets (sourced from the console `WORKFLOWS_RUNTIME` feature). **Neither local nor remote `validate` checks them** — a workflow can be `valid: true` and still be structurally unable to ever finish. In testing, this single gap caused every run failure (~12 deploy/trigger/trace cycles, 4 redesigns). Typical dev-runner defaults (your project's effective values are exposed in `deploy --json` → `runtime` — check there before designing anything non-trivial):
+Runners enforce hard budgets (sourced from the console `WORKFLOWS_RUNTIME` feature). **Neither local nor remote `validate` checks the time and memory budgets** — a workflow can be `valid: true` and still be structurally unable to ever finish. In testing, this single gap caused every run failure (~12 deploy/trigger/trace cycles, 4 redesigns). Typical dev-runner defaults (your project's effective values are exposed in `deploy --json` → `runtime` — check there before designing anything non-trivial):
 
 | Limit | Default | Meaning |
 |---|---|---|
 | `workflowTimeout` | 10 000 ms | The whole run. Runner 3.0.0-beta.14+ (dcupl-workflow-runner#82/#85) grants the **full** budget and only then a 3 s grace before the hard kill; older runners stopped ~3 s early because spawn/serialization overhead ate into it, so budget ~7–8 s of node time there |
 | `requestTimeout` | 5 000 ms | A single `request` node's fetch — on beta.14+ this also bounds reading/parsing the response body, so a slow-trickling body now lands on the `timeout` port instead of overrunning |
-| `scriptTimeout` | 500 ms | A single `script` node. isolated-vm is far slower than native Node — a transform that takes 80ms locally can blow this, and the same script can pass one run and fail the next (shared-runner CPU variance) |
-| `workflowWorkers` | 1 | Nodes execute **sequentially** — parallel edges do NOT buy wall-clock time |
+| `scriptTimeout` | 500 ms | One script of a `script`, `response-script` or `dcupl-instance` node; over it the node fails with `Script execution timed out after 500ms`. isolated-vm is far slower than native Node — a transform that takes 80ms locally can blow this, and the same script can pass one run and fail the next (shared-runner CPU variance) |
+| `max_heap_size` | 128 MB | Memory of a run; over it the run fails with HTTP 507 |
+| `maxNodes` / `maxEdges` | 100 / 100 | Per workflow; checked by remote `validate` (`node-count-exceeded` / `edge-count-exceeded`) |
+
+Fixed, not per project: 1,000,000 items on one edge; deployed key `<projectId>-<key>` 4–49 chars. Nodes of one topological layer start together (V3 graph engine, `Promise.all`); the feature's `workflowWorkers` is a V1 setting the V3 engine does not read.
 
 The effective values for your project are currently exposed in exactly one place: the `runtime` object embedded in `dcupl workflow deploy --json` output. Check it before designing anything non-trivial.
 
@@ -77,14 +89,16 @@ Design consequences for payloads beyond ~1MB:
 
 Every step receives an array of **items**, each `{ json: {...} }`, and emits the same shape on an output port. Edges wire one node's output port to the next node's input port (usually `main`). You reach incoming data two ways:
 
-- **Inside a `script` node:** the input is exposed through `$json` — `$json.first()` is the first input item's `json`, `$json.last()` the last, `$json.at(i)` the i-th (see fan-in below). For the whole input array use `$items()` (the form the `ScriptStepConfig --example` now shows), or `$json()` for just the `json` of every item. `$json` and `$items` are callable and expose `first` / `last` / `at` / `fromPort` — there is **no** bare `items` global and **no** `$json.all()` (both are `undefined`). Alongside them: `$input` (`ports()`, `hasPort(name)`, `count()`, `countByPort(name)`), `$context` (executionId, workflowKey, nodeId, variables, request, user), `$state` (`get`/`set`/`has`/`delete`/`clear`/`keys`/`values`/`entries`) and `$ports(portMap)`.
-- **Inside config string fields** (`request.url`, `dcupl-files` path/content, …): template expressions, evaluated against the first input item:
-  - `{{$json.field}}` — one field of the incoming json (coerced to string)
-  - `{{$json}}` — the entire incoming json, stringified
-  - `{{variables.name}}` — a project/workflow variable. Names are a **flat** dictionary key, so `{{variables.a.b}}` looks up the literal key `"a.b"` rather than descending — use flat `snake_case`. Credential fields resolve these too: `dcupl-files` (`auth.apiKey`, `version`), `s3-files` and `azure-files` (their `auth.*` plus bucket/container), and `git-files` (`auth.user`, `auth.token`, and `repository.user`/`repo`/`branch`). An unresolved token **fails the item** with `Unresolved template placeholder {{variables.x}}` (runners after `3.0.0-beta.12`, dcupl-workflow-runner#107; older runners leak it verbatim), and a variable defined-but-empty resolves to `''` and reaches the remote as a bad credential — the console blocks deploy on either case.
+- **Inside a `script` node:** `$json` is a function. `$json()` is the `json` of every input item (an array); `$json.first()` / `$json.last()` / `$json.at(i)` one item's `json`, or `null` when there is none; `$json.fromPort(name)` the `json` of the items on one input port (see fan-in below). `$json.title` is `undefined` — read `$json.first().title`. `$items` has the same shape but yields whole items `{ json, pairedItem }`. What does **not** exist: `$json.all()` and a bare `items` global (both `undefined`). Alongside them: `$input` (`ports()`, `hasPort(name)`, `count()`, `countByPort(name)`), `$context` (`executionId`, `workflowKey`, `nodeId`, `variables`, `request` — the trigger request `{ method, url, headers, query, params, body }`), `$state` (`get`/`set`/`has`/`delete`/`clear`/`keys`/`values`/`entries`) and `$ports(portMap)`. A request trigger emits one item `{ method, headers, query, params, body }`.
+- **Inside config string fields** of `request`, file (`dcupl-files`, `s3-files`, `azure-files`, `git-files`) and `dcupl-api` nodes (url, headers, body, path, content, mail fields, credentials): `{{…}}` placeholders, filled in **once per input item** — a file node runs its whole `files[]` list for every input item. Values are inserted with `String()`, so an object becomes `[object Object]`. `dcupl-instance` has no placeholders (its script reads `request`).
+  - `{{$json.field}}` — a field of the item's json; a dotted path reaches nested fields (`{{$json.address.city}}`)
+  - `{{$json}}` — the entire item json, as a JSON string
+  - `{{variables.name}}` — a project/workflow variable. Names are a **flat** dictionary key, so `{{variables.a.b}}` looks up the literal key `"a.b"` rather than descending — use flat `snake_case`. Credential fields resolve these too: `dcupl-files` (`auth.apiKey`, `version`), `s3-files` and `azure-files` (their `auth.*` plus bucket/container), and `git-files` (`auth.user`, `auth.token`, and `repository.user`/`repo`/`branch`). A variable defined-but-empty resolves to `''` and reaches the remote as a bad credential — the console blocks deploy on a missing or empty variable.
+
+    **Unresolved placeholders** (any namespace) raise `Unresolved template placeholder {{…}}` — never left in the text, never `''` (runners after `3.0.0-beta.12`, dcupl-workflow-runner#107; older runners leak the token verbatim). What fails depends on the node: `request`, `dcupl-files`, `git-files` — the **whole node** (one error item on `error`, the other items' results dropped; no `error` edge → the run fails); `s3-files`, `azure-files` — that item yields `{ error, files: [], ok: false }` on `main`, the rest go on; `dcupl-api` — that item goes to `error`, the rest go on.
 
     ⚠️ `git-files` resolves its auth/repo fields **once, before the item loop, against an empty item**, because the git client is built a single time per node execution. So `{{variables.*}}` and `{{request.*}}` work there, but `{{$json.*}}` does **not** — a per-item value cannot select the repo or branch. `s3-files`/`azure-files` re-evaluate per item and have no such limit.
-  - `{{request.body.field}}` — a field of the triggering HTTP request. `request` is always the **whole** request `{ method, headers, query, params, body }` — the same object a script reads as `$context.request` — so body fields are `{{request.body.field}}`, query params `{{request.query.x}}`, headers `{{request.headers.x}}`. This is uniform across `request`, `dcupl-api`, `dcupl-files`, `s3-files`, `azure-files`, `git-files` and `dcupl-instance` since dcupl-workflow-runner#107 (runners after `3.0.0-beta.12`). ⚠️ Before #107 the `request` node alone resolved `{{request.field}}` against the body; that shorthand now fails the item with `Unresolved template placeholder {{request.field}} (did you mean {{request.body.field}}?)`. A missing field never resolves to an empty string — the item fails and the placeholder never reaches the remote. Treat trigger-body fields as required and validate them in an early script node.
+  - `{{request.body.field}}` — a field of the triggering HTTP request. `request` is always the **whole** request `{ method, url, headers, query, params, body }` — the same object a script reads as `$context.request` — so body fields are `{{request.body.field}}`, query params `{{request.query.x}}`, headers `{{request.headers.x}}`, path params `{{request.params.x}}`. Uniform across `request`, `dcupl-api` and the four file nodes since dcupl-workflow-runner#107 (runners after `3.0.0-beta.12`). ⚠️ Before #107 the `request` node alone resolved `{{request.field}}` against the body; that shorthand now raises `Unresolved template placeholder {{request.field}} (did you mean {{request.body.field}}?)`. A missing field never resolves to an empty string and never reaches the remote. Treat trigger-body fields as required and validate them in an early script node.
   - `{{$state.key}}` — a value an upstream script stored with `$state.set` (nested paths work: `{{$state.summary.rows_total}}`; bare `{{$state}}` stringifies the whole bag). **Runner-version gated:** resolved from the release after `3.0.0-beta.12` (dcupl-workflow-runner#117); older runners leave the token verbatim, which poisons the field like any unresolved placeholder — check `dcupl workflow runners list` before relying on it. See "`$state`" below.
 
 A node's output json becomes the next node's `{{$json}}`. To pass a value downstream, `return` it from a script under a known key, then reference `{{$json.thatKey}}`.
@@ -105,25 +119,23 @@ Output does **not** accumulate down the chain. A node reads only what its incomi
 const writeResult = $json.fromPort("write-result")[0]; // { files, ok }
 const report = $json.fromPort("report")[0];            // { report, ... }
 
-return {
-  status: 200,
-  body: { ok: writeResult.ok, written: writeResult.files, report: report.report },
-};
+// The returned object IS the response body (see "response-script" below).
+return { ok: writeResult.ok, written: writeResult.files, report: report.report };
 ```
 
 ### Custom ports — name what flows
 
-Every node carries `inputs[]` and `outputs[]`, each entry `{ "type": "<port-name>", "displayName"?: "…", "required"?: true }` (`required` is inputs-only). `type` is the port id an edge refers to; `displayName` is the label the console shows on the handle. Edges name both ends independently — `source.port` on the producer, `target.port` on the consumer — so a script can emit on `summary` and the next node can receive it on `main`, or vice versa. Defaults when you don't declare anything: inputs `[{ type: "main", required: true }]`, outputs `main` + `error`.
+Every node carries `inputs[]` and `outputs[]` (both required — there are no defaults), each entry `{ "type": "<port-name>", "displayName"?: "…", "required"?: true }` (`required` is inputs-only). `type` is the port id an edge refers to; `displayName` is the label the console shows on the handle. Edges name both ends independently — `source.port` on the producer, `target.port` on the consumer — so a script can emit on `summary` and the next node can receive it on `main`, or vice versa. The usual step declaration is inputs `[{ "type": "main" }]`, outputs `main` + `error` (+ the catalog ports below).
 
 Rules the runner and validator enforce (verified in `@dcupl/common-internal`'s `validateEdgePort` and the runner's node executor):
 
 - **`script` nodes may declare any output port; `script` and `response-script` nodes may declare any input port.** Every other node type is locked to its catalog (`request`: `main` / `error` / `client-error` / `server-error` / `timeout`; `dcupl-files`: `main` / `error` / `not-found` / `permission-denied` / `already-exists`; most others `main` / `error`). `dcupl workflow validate` reports an edge on a non-catalog port of a locked node as `port-mismatch`.
 - **Declare the port on the node.** The runner routes purely by the edge's port names, but the console can only draw an edge onto a handle that exists in `inputs[]` / `outputs[]`. Always add the entry, with a `displayName`.
-- **Every custom output port must be wired.** A non-`main` port that produces items but has no consuming edge is promoted to a node error and fails the run. If a branch is sometimes empty, emit an empty array (empty ports are skipped) or don't emit the port at all.
+- **Every custom output port must be wired.** A non-`main` port that produces items but has no consuming edge is replaced by one generated error item on the node's `error` port — and if `error` has no edge either, the run fails. (Items on an unwired `main` just end the branch.) If a branch is sometimes empty, emit an empty array (empty ports are skipped) or don't emit the port at all.
 - **Keep `main` as the primary path**, and don't reuse the runner's error vocabulary for happy-path branches: `error`, `timeout`, `client-error`, `server-error`, `not-found`, `permission-denied`, `already-exists`.
 - **`required: true` on an input** makes the node *skip* (not fail) when its merged input is empty — this is how an upstream failure routed to its `error` port halts the happy path. Mark data inputs required; leave optional side inputs unmarked.
 
-**Producer side** (script): return `$ports({...})` or `_output.route({...})` — a bare object `{ main: [...] }` is *data*, not routing.
+**Producer side** (script): return `$ports({...})` or `_output.route({...})` — they add the `__ports__` marker the runner routes on. A bare object `{ main: [...] }` is *data*, not routing, and so is what `_output.create()…build()`, `_output.main()`, `_output.error()` and `_output.success()` return (plain objects without the marker): one item on `main`.
 
 ```js
 // Split the incoming rows into the ones to persist and a one-item summary
@@ -184,12 +196,9 @@ return { csv: _csv.fromJSON(cleanedRows, { headers: outputHeaders }) };
 const writeResult = $json.first();
 
 return {
-  status: 200,
-  body: {
-    ok: writeResult.ok,
-    written: writeResult.files.map((file) => file.path),
-    rows: { total: $state.get("rows_total", 0), skipped: $state.get("rows_skipped", 0) },
-  },
+  ok: writeResult.ok,
+  written: writeResult.files.map((file) => file.path),
+  rows: { total: $state.get("rows_total", 0), skipped: $state.get("rows_skipped", 0) },
 };
 ```
 
@@ -197,17 +206,20 @@ return {
 
 Script runs in an isolated VM — not plain Node. The available globals are a curated set:
 
-- **I/O:** `$json.first()` / `$json.last()` / `$json.at(i)` (and `$items()` / `$json()` for the full input array); `$json.fromPort(name)` / `$items.fromPort(name)` for one named input port; `$input`, `$context`, `$state` as listed under "How data flows" and "`$state`"; `return value` → `main` port; `throw new Error(...)` → `error` port; `return _output.route({ portA: [...], portB: [...] })` (or `$ports({...})`) for explicit multi-port routing — see "Custom ports".
+- **I/O:** `$json()` / `$json.first()` / `.last()` / `.at(i)` / `.fromPort(name)` and the same on `$items` (whole items); `$input`, `$context`, `$state` as listed under "How data flows" and "`$state`". The code is the body of an async function: top-level `await` and `return` work.
+- **What a script returns:** an array → one item per entry on `main`; an object → one item on `main` (the object is its json); a primitive `42` → one item `{ "value": 42 }`; `undefined` / `null` → the input items unchanged on `main`; `$ports({...})` / `_output.route({...})` → each key a port (an array → one item per entry, a single value → one item) — see "Custom ports"; `throw new Error(...)` → the `error` port.
 - **Helpers are namespaced** (this is the part that surprises people — they are NOT bare functions):
-  - `_csv` — `toJSON(csvString)`, `fromJSON(rows, { headers, delimiter })`, `headers(csv)`, `validate(...)`. `toJSON` parses (handles quoting/escaping); `fromJSON` serializes (escapes fields; pass an explicit `headers` array to fix column order or drop columns).
-  - `_json` — `distinct`, `groupBy`, `flatten`, `unflatten`, `merge`, `pick`, `omit`, `toCSV`, `parse`, `stringify`
+  - `_csv` — `toJSON(csvString)`, `fromJSON(rows, { headers, delimiter })`, `headers(csv)`, `validate(...)`, plus `parseCsvLine` / `escapeCsvField`. `toJSON` parses (handles quoting/escaping); `fromJSON` serializes (escapes fields; pass an explicit `headers` array to fix column order or drop columns).
+  - `_json` — `distinct`, `groupBy`, `flatten`, `unflatten`, `merge`, `pick`, `omit`, `toCSV`, `parse`, `stringify`. ⚠️ `toCSV` throws in a script node — use `_csv.fromJSON`.
   - `_array` — `chunk`, `unique`, `flatten`, `groupBy`, `sortBy`, `pluck`, `sum`, `avg`, `min`, `max`, `intersect`, `difference`, `sample`, `shuffle`
-  - `_string` — `slugify`, `capitalize`, `camelCase`, `snakeCase`, `kebabCase`, `truncate`, `template`, `stripHtml`, `escapeHtml`, `unescapeHtml`, `toBase64`, `fromBase64`, `pad`, `reverse`, `count`, `startsWith`, `endsWith`
+  - `_string` — `slugify`, `capitalize`, `camelCase`, `snakeCase`, `kebabCase`, `truncate`, `template`, `stripHtml`, `escapeHtml`, `unescapeHtml`, `toBase64`, `fromBase64`, `pad`, `reverse`, `count`, `startsWith`, `endsWith`. ⚠️ `toBase64` / `fromBase64` throw `Buffer is not defined` in a script node.
   - `_object` — `get`, `set`, `has`, `merge`, `clone`, `pick`, `omit`, `mapKeys`, `mapValues`, `invert`, `keys`, `values`, `isEmpty`
   - `_datetime` — `now`, `toISO`, `format`, `parse`, `add`, `subtract`, `diff`, `isBefore`, `isAfter`, `isSame`, `startOf`, `endOf`
-  - `_output` — `route(portMap)`, `create()` (builder with `send`/`sendAll`/`build`), `partition(items, predicate)`, `split(items, predicates)`, `main(items)`, `error(items)`, `success(items)`, `isValid(result)`
-  - `_xml` — `parse`, `toJSON`, `stringify`, `fromJSON`, `validate`. (The `_http` and `_crypto` namespaces exist but are **blocked** — they throw on use.)
-- **Plus:** `Math`, `Date`, `JSON`. **`console` exists only when the run is traced** (`?dataTrace=true`, which `dcupl workflow test`/`run` always set) — on a plain production trigger `console` is not defined, so `console.log(...)` throws a `ReferenceError` and routes the node to its `error` port. Don't leave `console.log` in production scripts. **HTTP is blocked inside script nodes** (no `fetch`; `_http.*` throws) — to make an outbound HTTP call use a `request` node. No filesystem; use file nodes for I/O.
+  - `_output` — `route(portMap)` (routes, like `$ports`), `create()` (builder with `send`/`sendAll`/`build`), `partition(items, predicate)` → `[matched, rest]`, `split(items, predicates)` → one group per predicate + the rest, `main(items)`, `error(items)`, `success(items)`, `isValid(result)`. Only `route` routes — `build()`/`main()`/`error()`/`success()` return plain objects, which are data.
+  - `_xml` — `parse`, `toJSON`, `stringify`, `fromJSON`, `validate`
+  - `_nodes` — `dcuplFiles` / `gitFiles` / `s3Files` / `azureFiles` / `request`, each `.prepare(ops, shared?)`: merges `shared` into every op object and returns them as plain data (a file node still runs its own `config.files`).
+  - `_http` and `_crypto` exist but every call throws — fetch with a `request` node, keep secrets in workflow variables. (The ⚠️ helper throws are dcupl-workflow-runner#214, open.)
+- **Plus:** the standard JS built-ins (`JSON`, `Math`, `Date`, `Promise`, …) and nothing from Node or the browser: no `fetch`, `require`, `process`, `Buffer`, timers, filesystem — use `request` and file nodes for I/O. **`console.log` / `.info` / `.warn` / `.error` / `.debug` always exist but are captured only on a traced run** (see "Reading a trace"); otherwise they do nothing, so a leftover `console.log` is harmless.
 
 > ⚠️ **There is no bare `csvToJson` / `jsonToCsv`** — calling them throws `ReferenceError: csvToJson is not defined`. Use `_csv.toJSON` / `_csv.fromJSON`. (Bare names exist in an older, non-v3 execution path; the live v3 script executor injects only the `_`-namespaced helpers. Trust the namespaced ones.)
 
@@ -260,7 +272,16 @@ Not in any schema: a `request` node emits one item whose json is
 { "body": "<parsed-or-raw>", "headers": {}, "statusCode": 200, "statusText": "OK", "contentType": "...", "ok": true, "_meta": {} }
 ```
 
-so the payload is at `$json.first().body` in the next node. With `autoParse: true` the node parses the response **natively, outside any script budget**: JSON → objects, CSV → an array of header-keyed row objects. For large CSVs this is the only practical path past the 500ms script limit — see "Runtime limits" above.
+so the payload is at `$json.first().body` in the next node (`_meta` is a deprecated copy). With `autoParse` (default `true`) the node parses the response by content type **natively, outside any script budget**: JSON → objects, CSV → an array of header-keyed row objects, XML → parsed; `responseType` (`json` | `text` | `blob`) overrides the detection. For large CSVs this is the only practical path past the 500ms script limit — see "Runtime limits" above.
+
+### `response-script` — the HTTP answer
+
+Same globals as a script node, plus four shortcuts: `data` (= `$json()`), `executionId`, `variables`, `request`. **The returned object is the response body**, nothing else:
+
+- `status` / `body` keys mean nothing to the runner — `return { status: 404, body: {...} }` answers HTTP 200 with exactly that object. Return the body itself.
+- An array is spread into `{ "0": …, "1": … }` — wrap it: `return { products: data };`.
+- `return { data, headers }` sends `data` as the body and adds `headers` over the node's `config.headers`.
+- The HTTP status is 200 unless the run failed: 504 (timeout), 507 (memory), 500 (anything else), body `{ "error": { message, detail, errorType, nodeId } }`. A run stopped by its time or memory limit answers in the no-response-node shape instead (see "Triggering the runner directly").
 
 ### `dcupl-files` — read/write cloud files
 
@@ -330,7 +351,7 @@ trigger-request → dcupl-files(read) → script(transform) → dcupl-files(writ
 - **read:** `{ "action": "read", "path": "data/articles.csv" }`
 - **script:** the "Write the script to be read" example above — parse `$json.first().files[0].data`, transform, `return { csv }` (and stash counts in `$state` for the response). Never ship it as a one-liner.
 - **write:** `{ "action": "write", "path": "data/articles.cleaned.csv", "content": "{{$json.csv}}" }`
-- **response:** `return { status: 200, body: { ok: $json.first().ok, written: $json.first().files } };`
+- **response:** `return { ok: $json.first().ok, written: $json.first().files };` (the object is the body)
 
 ### Canvas annotations — `ui.notes[]`
 
@@ -383,7 +404,7 @@ Write the result to `workflows/<key>.workflow-v3.json`. Convention: one file per
 dcupl workflow validate --file workflows/my-workflow.workflow-v3.json
 ```
 
-Local validation checks: valid `TemplateV3` shape, node configs match their declared types, edge port mismatches (an edge wired to a port the node doesn't have), plus a static lint of `script`/`response-script` code — warnings for bare `csvToJson`/`jsonToCsv`/`items`/`input`/`fetch`, the blocked `_http`/`_crypto`, and unknown `$`/`_` names (typos of sandbox globals). Lint hits never make the file invalid; the output reads `✓ valid (N warning(s))` followed by one `⚠ [node] …` line each. No network required, no credentials needed.
+Local validation checks: valid `TemplateV3` shape, node configs match their declared types, unique node and edge ids, at least one trigger, triggers without inputs/incoming edges and responses without outputs/outgoing edges, edges naming existing nodes and declared ports (`port-mismatch`), `merge` rules (≥ 2 input ports, `merge-by-key` needs `key`), a `request` `url` that is a valid URL or contains `{{…}}`, plus a static lint of `script`/`response-script` code — warnings for bare `csvToJson`/`jsonToCsv`/`items`/`input`/`fetch`, the blocked `_http`/`_crypto`, and unknown `$`/`_` names (typos of sandbox globals). Lint hits never make the file invalid; the output reads `✓ valid (N warning(s))` followed by one `⚠ [node] …` line each. No network required, no credentials needed.
 
 ### 3. Validate remotely (optional but recommended before test/deploy)
 
@@ -391,7 +412,7 @@ Local validation checks: valid `TemplateV3` shape, node configs match their decl
 # Discover available runners first:
 dcupl workflow runners list
 
-# Remote validation adds: cycle detection, expression checks, feature-limit checks.
+# Remote validation adds: cycle detection, expression checks, the project's node/edge limits (100 each by default).
 # (It does NOT check runtime budgets — see "Runtime limits" above.)
 dcupl workflow validate --file workflows/my-workflow.workflow-v3.json --runner <runnerUid>
 ```
@@ -418,9 +439,9 @@ Prints a table: `uid`, `runnerKey`, `type`, `url`, `health` (a live probe of the
 dcupl workflow test --file workflows/my-workflow.workflow-v3.json --runner <devRunnerUid>
 ```
 
-This validates locally, deploys to the dev runner, then triggers the workflow via the trigger-request node's configured `path` and first `method`. The response and a per-node trace are printed.
+This validates locally, deploys to the dev runner, then triggers the workflow via the trigger-request node's configured `path` and first `method`. On a runner from `3.0.0-beta.21` on, a successful full run prints **no per-node trace and no response body** — see "Reading a trace" for why and what to use instead; a failed run still prints the runner's error.
 
-> ⚠️ **`test` triggers with an EMPTY request body unless you pass `--input <file>`** — for a full run, `--input` is a JSON file that becomes the request body (there is no `--query` flag). A workflow whose templates read `{{request.field}}` will 4xx under a bare `test`; pass `--input`, or use `dcupl workflow run <key> --runner <uid> --body '<json>'` / deploy + curl (see "Debugging a failing run"). Before deploying, `test` and `deploy` probe the runner's `/health` and refuse with `RUNNER_UNREACHABLE` if it is down; after the deploy, swap failures name their cause and say whether a retry helps (`--json` errors carry `retryable` and `runnerStatus`): `WORKFLOW_RUNNER_UNREACHABLE` — the runner (or its proxy) did not answer, e.g. 502/503/504; it is down, not rejecting the workflow, and the stored deployment goes live once it is back (retryable); `WORKFLOW_SWAP_REJECTED` with `retryable: true` — the runner kept answering 404 until `--swap-timeout` because its config reload did not pick the workflow up; retrying the deploy triggers another reload, and if that fails too, check the runner's logs; `WORKFLOW_SWAP_REJECTED` with `retryable: false` — the runner refused console-api's status request (401/403, usually a runner key mismatch); a retry will not help, check the runner record; `WORKFLOW_SWAP_ERROR` — the runner instance reports `status: 'error'` (not retryable); `WORKFLOW_SWAP_TIMEOUT` — the version never converged within `--swap-timeout` (retryable). Check `dcupl workflow runners list` health and `dcupl workflow status --id <uid>` (which prints console-api's unreachable/rejected reason) before retrying. A CLI older than this split reports all of these as `WORKFLOW_SWAP_ERROR: runner reported an error during swap: Request failed with status code N`; a first-deploy 403/404 there was usually the poll racing the reload, so one retry is reasonable.
+> ⚠️ **`test` triggers with an EMPTY request body unless you pass `--input <file>`** — for a full run, `--input` is a JSON file that becomes the request body (there is no `--query` flag). A workflow whose templates read `{{request.body.field}}` fails under a bare `test` (`Unresolved template placeholder`); pass `--input`, or use `dcupl workflow run <key> --runner <uid> --body '<json>'` / deploy + curl (see "Debugging a failing run"). Before deploying, `test` and `deploy` probe the runner's `/health` and refuse with `RUNNER_UNREACHABLE` if it is down; after the deploy, swap failures name their cause and say whether a retry helps (`--json` errors carry `retryable` and `runnerStatus`): `WORKFLOW_RUNNER_UNREACHABLE` — the runner (or its proxy) did not answer, e.g. 502/503/504; it is down, not rejecting the workflow, and the stored deployment goes live once it is back (retryable); `WORKFLOW_SWAP_REJECTED` with `retryable: true` — the runner kept answering 404 until `--swap-timeout` because its config reload did not pick the workflow up; retrying the deploy triggers another reload, and if that fails too, check the runner's logs; `WORKFLOW_SWAP_REJECTED` with `retryable: false` — the runner refused console-api's status request (401/403, usually a runner key mismatch); a retry will not help, check the runner record; `WORKFLOW_SWAP_ERROR` — the runner instance reports `status: 'error'` (not retryable); `WORKFLOW_SWAP_TIMEOUT` — the version never converged within `--swap-timeout` (retryable). Check `dcupl workflow runners list` health and `dcupl workflow status --id <uid>` (which prints console-api's unreachable/rejected reason) before retrying. A CLI older than this split reports all of these as `WORKFLOW_SWAP_ERROR: runner reported an error during swap: Request failed with status code N`; a first-deploy 403/404 there was usually the poll racing the reload, so one retry is reasonable.
 
 #### Single-node test (exercise one node in isolation):
 
@@ -432,7 +453,7 @@ dcupl workflow test --file workflows/my-workflow.workflow-v3.json \
   # --state state.json      # optional: workflow state for context
 ```
 
-`--node` routes to the console-api test-node endpoint, running just that node against the provided input without executing the full workflow.
+`--node` routes to the console-api test-node endpoint, running just that node against the provided input without executing the full workflow. These runs are **always traced** (outputs, `console` output, errors) — the most direct way to see what a script does.
 
 #### Authenticate against an auth-protected trigger:
 
@@ -472,12 +493,17 @@ dcupl workflow undeploy --id <workflowUid> --yes
 
 ## Reading a trace
 
-`dcupl workflow test` renders a per-node trace after each run. Each row shows:
+**When a run is traced.** The runner records a data trace (per-node inputs/outputs, evaluated configs, request/response data, script `console` output) only when the trigger call asks for `dataTrace=true` **and carries the runner key** (`manager-key` header or query) — without the key the parameter is silently ignored (runner `3.0.0-beta.21`+, `v3-executor.controller.ts` `debugOptionsFor`). Only console-api holds that key, so on a current runner a run is traced when it comes from:
+
+- the console's **Test** panel with **Enable Data Trace** (console-api `POST …/workflows-v3/:id/triggers/:nodeId/invoke?dataTrace=true` adds the key);
+- `dcupl workflow test|run --node <id>` (test-node, always traced).
+
+`dcupl workflow test` / `run` **full runs call the runner directly with `dataTrace=true` but no runner key**, so on runners from `3.0.0-beta.21` they come back untraced: a success prints only the header line `Execution (unknown) — workflow <key>` (no nodes, no response body; `--json` gives `{ workflowKey }`), and a failure prints the runner's error envelope (below). For a full run's per-node status/duration/error use `dcupl workflow trace --id <uid> --last`; for the body, curl the runner (see "Triggering the runner directly"). Against an older runner, or for a traced run, `test`/`run` render the trace:
 
 - **Node id** and type
 - **Status** — `ok` / `error` / `skipped`
 - **Timing** — duration in ms
-- **Console logs** — any `console.log` output from script nodes
+- **Console logs** — `console.*` output from script nodes
 - **Errors** — error message + stack if the node failed
 
 Human output is one line per node — `• <nodeId> [ok|ERROR, <n>ms] → <n> item(s)`, with `log:` and `error:` lines indented under it — headed by `Execution <id> — workflow <key>`. There is no `PASS`/`FAIL` line: a run with any node error ends with `WORKFLOW_RUN_ERROR` and a non-zero exit code.
@@ -488,15 +514,15 @@ For structured output (e.g. when driving from an agent or CI script), pass `--js
 dcupl workflow test --file workflows/my-workflow.workflow-v3.json --runner <devRunnerUid> --json
 ```
 
-The JSON result includes the full trace as a structured object — easier to parse than terminal output and unambiguous on pass/fail.
+For a traced run the JSON result includes the full trace as a structured object — easier to parse than terminal output and unambiguous on pass/fail.
 
-> **On failure, `test`/`run` unwrap the runner's response**, most specific signal first: the per-node trace if the failure body still carries one; else the runner's error envelope as `✗ <message> @ nodeId: <id> [errorType: …]`; a 403 attributable to a `dcupl-files` node becomes a `WORKFLOW_FILES_AUTH` hint (check `auth.apiKey`); only when the body has nothing structured do you get the bare message plus `(HTTP <status>)`. If you do land on that bare line, use the direct-trigger technique below.
+> **On failure, `test`/`run` unwrap the runner's response**, most specific signal first: the per-node trace if the failure body still carries one (traced runs only — never for a full run on a beta.21+ runner); else the runner's error envelope as `✗ <message> @ nodeId: <id> [errorType: …]`; a 403 attributable to a `dcupl-files` node becomes a `WORKFLOW_FILES_AUTH` hint (check `auth.apiKey`); only when the body has nothing structured do you get the bare message plus `(HTTP <status>)`. If you do land on that bare line, use the direct-trigger technique below.
 
 ---
 
 ## Debugging a failing run
 
-**Rule zero: never trust the trigger/`test` response status.** A run that fails (e.g. hits the workflow timeout) can still return `{"status":"completed","data":[]}` to the caller while `history`/`trace` correctly record `failed` (a known runner issue, still open). An empty `data` array on a "completed" run is the tell. Cross-check `history` after **every** run before believing it. Related: a multi-write `dcupl-files` node is non-atomic — on a timeout, earlier writes may have committed server-side while later ones never ran, with `failedNodes: 0` in the metadata (also a known open runner issue). Verify outputs with `dcupl files list`/`read`, not the run report.
+**Rule zero: read the HTTP status and `history`, not just the body.** Since runner `3.0.0-beta.14` (dcupl-workflow-runner#82) a failed run answers 500 / 504 (timeout) / 507 (memory) with `status: "failed"` — or `{ error }` from a Script Response — and `history`/`trace` record `failed`. Runners before that answered `{"status":"completed","data":[]}` for a failed run (an empty `data` on a "completed" run is the tell there). A multi-write `dcupl-files` node is non-atomic: on a failure or timeout earlier writes stay committed; the node's `details.files[]` ledger (beta.14+, #84) says which. Verify outputs with `dcupl files list`/`read`, not the run report.
 
 ### The primary tools: `history` + `trace`
 
@@ -507,7 +533,7 @@ dcupl workflow trace --id <workflowUid> --run <executionId> --json   # per-node:
 dcupl workflow trace --id <workflowUid> --last                       # same, for the most recent run (prints which run it picked)
 ```
 
-`trace` is the workhorse: per-node status/duration/error, and for runs triggered with `?dataTrace=true` it also carries evaluated node configs, truncated payload samples, and script `console.log` output. The loop in practice: `deploy` → trigger via `run` or curl (below) → `history` for the run status + executionId → `trace` for the failing node. (`dcupl workflow get/template/status` exist too — see `dcupl workflow --help`.)
+`trace` is the workhorse: per-node status/duration/error for **every** run (human output is a `nodeId / status / durationMs / error` table; `--json` is the full graph state). Only a traced run (see "Reading a trace" — console Test panel with **Enable Data Trace**) also carries `metadata.dataTrace`: evaluated node configs, truncated payload samples, script `console` output. The loop in practice: `deploy` → trigger via `run` or curl (below) → `history` for the run status + executionId → `trace` for the failing node. (`dcupl workflow get/template/status` exist too — see `dcupl workflow --help`.)
 
 ### Re-triggering without redeploying: `dcupl workflow run`
 
@@ -519,30 +545,44 @@ dcupl workflow run <key> --runner <runnerUid> --node <nodeId> --body '{"main":[{
 dcupl workflow run <key> --runner <runnerUid> --trigger-key <apiKey>   # auth-protected trigger
 ```
 
-`run` never touches a local file and never redeploys: it looks the workflow up by key on that runner (`workflow list`'s deployed key or the bare template key both work), reads the trigger path/method from the deployed template, and calls the runner with `dataTrace=true`, rendering the same per-node trace as `test`. Use it to iterate on inputs against a deployment you've already made. Related flags on `deploy`/`test`: `--no-wait` (return without waiting for the hot-swap — reintroduces the stale-deployment race) and `--swap-timeout <ms>` (default 30000).
+`run` never touches a local file and never redeploys: it looks the workflow up by key on that runner (`workflow list`'s deployed key or the bare template key both work), reads the trigger path/method from the deployed template, and calls the runner with `dataTrace=true` — which, like `test`, comes back untraced from a beta.21+ runner (see "Reading a trace"; follow up with `trace --last`). Use it to iterate on inputs against a deployment you've already made. Related flags on `deploy`/`test`: `--no-wait` (return without waiting for the hot-swap — reintroduces the stale-deployment race) and `--swap-timeout <ms>` (default 30000).
 
-### Triggering the runner directly
+### Triggering the runner directly (calling a deployed workflow)
 
-To see the runner's **raw response** (including the `dataTrace` envelope untouched by the CLI), deploy and then hit the runner URL directly with `?dataTrace=true`:
+To see the runner's **raw response** — status, headers and body, untouched by the CLI — deploy and then call the runner URL yourself. This is also how any client calls a deployed workflow:
 
 ```bash
 # 1. deploy to a reachable runner (a local one is ideal). deploy ships this local file;
 #    `dcupl files push` only syncs the console copy — it's not required to deploy.
 dcupl workflow deploy --file workflows/<key>.workflow-v3.json --runner <runnerUid> --yes
 
-# 2. trigger the runner directly — dataTrace surfaces per-node errors
-curl -s -X POST \
-  'http://<runnerUrl>/v3/workflow/<projectId>-<key>/<triggerPath>?dataTrace=true' \
+# 2. call the trigger; -i shows the status and X-Dcupl-Execution-Id
+curl -si -X POST \
+  '<runnerUrl>/v3/workflow/<projectId>-<key>/<triggerPath>' \
+  -H 'api-key: <triggerKey>' \
   -H 'Content-Type: application/json' -d '{}'
+
+# 3. per-node detail for that run
+dcupl workflow trace --id <workflowUid> --run <X-Dcupl-Execution-Id>
 ```
 
-URL parts: `<runnerUrl>` from `dcupl workflow runners list`; `<projectId>` from `dcupl.config.json`; `<key>` is the template key; `<triggerPath>` is the trigger-request node's `path` **without its leading slash**. A node failure returns exactly what you need:
+URL parts: `<runnerUrl>` (with scheme) from `dcupl workflow runners list`; `<projectId>-<key>` is the deployed key (a runner set up without the project prefix uses the bare `key`; `dcupl workflow list` shows it); `<triggerPath>` is the trigger-request node's `path` **without its leading slash**. `api-key` (header, or `api-key`/`apiKey` query param) only when the trigger has `auth`; a missing/wrong key or an unknown deployed key answers `403`, a method/path no trigger matches `404` with `availableTriggers`. Don't add `?dataTrace=true`: without the runner key it is ignored (see "Reading a trace").
+
+| The run ends in… | Response body |
+|---|---|
+| a `response-script` | what the script returns; failed: `{ "error": { message, detail, errorType, nodeId } }` |
+| a `response-status` | `{ status: "completed", executionId, duration }`; failed: `status: "failed"` + `error: { message, detail }` |
+| no response node | `{ status, executionId, data, metadata: { duration, nodesExecuted, itemsProcessed } }` — `data` holds the items of the nodes that end a branch; failed: `data: []` + `error` |
+
+A failed run answers 504 (timeout), 507 (memory) or 500; a run stopped by its time or memory limit answers in the no-response-node shape even when it has a Script Response. E.g. a script node failure behind a Script Response:
 
 ```json
-{"error":{"message":"csvToJson is not defined","errorType":"ReferenceError","nodeId":"clean"}}
+{"error":{"message":"csvToJson is not defined","detail":"ReferenceError: csvToJson is not defined …","errorType":"ReferenceError","nodeId":"clean"}}
 ```
 
-and a success returns your `response-script` body. This **deploy → curl** loop shows the raw envelope `test`/`run` render for you, and works against any runner you can reach (including a local `http://localhost:3003`). Add `&async=true` for fire-and-forget.
+⚠️ The answer comes from the **first node in `nodes[]` that ends a branch with items** — with a response node plus another branch ending in a step, let that step `return []`, or its items may become the answer (dcupl-workflow-runner#214, open).
+
+`?async=true` answers at once with `{ jobId, status: "queued", workflowKey, statusUrl, eventsUrl, createdAt }`; poll `GET …/v3/workflow/<deployed-key>/jobs/<jobId>/status` with the same `api-key` (`status` `queued` | `running` | `completed` | `failed` | `cancelled`, `result` once completed), `DELETE …/jobs/<jobId>` cancels, `GET …/jobs/<jobId>/events` streams SSE; jobs are kept for one hour. This **deploy → curl** loop works against any runner you can reach (including a local `http://localhost:3003`).
 
 ---
 
@@ -575,7 +615,7 @@ See `references/cloud-sync.md` for the full file-sync reference.
 
 ## Common mistakes
 
-- **Using `code` instead of `script`** in a script or response-script node config. The field is always `script`.
+- **Using `code` instead of `script`** in a script, response-script or dcupl-instance node config. The field is always `script`.
 - **Setting fields on `response-status` config.** The config must be `{}`. Status is derived from workflow completion. Extra fields don't error — the schema silently **strips** them (Zod `.strip`), so a `statusCode` you add there is dropped with no warning and has no effect. Author it as `{}` so intent is clear.
 - **Pointing `test` at a production runner.** `test` deploys unconditionally. Use a dedicated dev runner.
 - **Running `test` without `--runner`.** Remote test requires a runner UID — there is no local executor.
@@ -583,7 +623,9 @@ See `references/cloud-sync.md` for the full file-sync reference.
 - **Reaching for bare `csvToJson`/`jsonToCsv` in a script node.** They aren't in the sandbox — use the namespaced `_csv.toJSON` / `_csv.fromJSON` (see "Authoring node logic").
 - **Confusing the two apiKeys.** `dcupl-files` `auth.apiKey` is a project *workflow* key, not the console UUID in `dcupl.secrets.json`. A 403 on a files node almost always means the wrong key. Prefer `{{variables.dcupl_api_key}}` and the question doesn't arise.
 - **Leaving a credential field empty "for the user to fill in later".** Deploy is now gated on unsatisfied `{{variables.x}}` references — missing *or* empty both block. An empty field yields an undeployable workflow, not a fixable one.
-- **Routing to a custom output port nobody consumes.** A non-`main` port with items and no outgoing edge is promoted to an error and fails the run. Wire every port you emit (see "Custom ports").
+- **Routing to a custom output port nobody consumes.** A non-`main` port with items and no outgoing edge becomes an error item on `error` — and fails the run when `error` is unwired too. Wire every port you emit (see "Custom ports").
+- **Returning `{ status, body }` from a `response-script`.** The returned object *is* the body; `status` sets nothing (HTTP is 200 unless the run failed). Return the body object itself (see "`response-script`").
+- **Expecting a per-node trace or `console` output from a full `test`/`run`.** Since runner `3.0.0-beta.21` the CLI's direct call is untraced. Use `test --node`, `trace --last`, or the console Test panel with **Enable Data Trace** (see "Reading a trace").
 - **Reordering `nodes[]` / `edges[]` or moving `ui.positions` while editing an existing workflow.** Edge order drives positional fan-in (`$json.at(i)`), and the user's canvas layout is theirs. Append, don't rearrange.
 - **Putting payloads in `$state`.** It is copied into and out of every script isolate; keep it to scalars and short summaries. Rows and file contents travel on edges.
 - **Using `{{$state.x}}` in a config against an old runner.** Template support for `$state` landed after runner `3.0.0-beta.12` (dcupl-workflow-runner#117); an older runner leaves the token verbatim and the field is poisoned. If the project's runner is older, return the value from a script into `$json` and template `{{$json.x}}`.
