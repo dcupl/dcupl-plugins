@@ -64,7 +64,7 @@ Runners enforce hard budgets (sourced from the console `WORKFLOWS_RUNTIME` featu
 |---|---|---|
 | `workflowTimeout` | 10 000 ms | The whole run. Runner 3.0.0-beta.14+ (dcupl-workflow-runner#82/#85) grants the **full** budget and only then a 3 s grace before the hard kill; older runners stopped ~3 s early because spawn/serialization overhead ate into it, so budget ~7–8 s of node time there |
 | `requestTimeout` | 5 000 ms | A single `request` node's fetch — on beta.14+ this also bounds reading/parsing the response body, so a slow-trickling body now lands on the `timeout` port instead of overrunning |
-| `scriptTimeout` | 500 ms | One script of a `script`, `response-script` or `dcupl-instance` node; over it the node fails with `Script execution timed out after 500ms`. isolated-vm is far slower than native Node — a transform that takes 80ms locally can blow this, and the same script can pass one run and fail the next (shared-runner CPU variance) |
+| `scriptTimeout` | 500 ms | One script of a `script`, `response-script` or `dcupl-instance` node; over it the node fails with `Script execution timed out after 500ms` (`dcupl-instance`: `Script execution timeout - 500ms`). isolated-vm is far slower than native Node — a transform that takes 80ms locally can blow this, and the same script can pass one run and fail the next (shared-runner CPU variance) |
 | `max_heap_size` | 128 MB | Memory of a run; over it the run fails with HTTP 507 |
 | `maxNodes` / `maxEdges` | 100 / 100 | Per workflow; checked by remote `validate` (`node-count-exceeded` / `edge-count-exceeded`) |
 
@@ -209,7 +209,7 @@ Script runs in an isolated VM — not plain Node. The available globals are a cu
 - **I/O:** `$json()` / `$json.first()` / `.last()` / `.at(i)` / `.fromPort(name)` and the same on `$items` (whole items); `$input`, `$context`, `$state` as listed under "How data flows" and "`$state`". The code is the body of an async function: top-level `await` and `return` work.
 - **What a script returns:** an array → one item per entry on `main`; an object → one item on `main` (the object is its json); a primitive `42` → one item `{ "value": 42 }`; `undefined` / `null` → the input items unchanged on `main`; `$ports({...})` / `_output.route({...})` → each key a port (an array → one item per entry, a single value → one item) — see "Custom ports"; `throw new Error(...)` → the `error` port.
 - **Helpers are namespaced** (this is the part that surprises people — they are NOT bare functions):
-  - `_csv` — `toJSON(csvString)`, `fromJSON(rows, { headers, delimiter })`, `headers(csv)`, `validate(...)`, plus `parseCsvLine` / `escapeCsvField`. `toJSON` parses (handles quoting/escaping); `fromJSON` serializes (escapes fields; pass an explicit `headers` array to fix column order or drop columns).
+  - `_csv` — `toJSON(csvString)`, `fromJSON(rows, { headers, delimiter })`, `headers(csv)`, `validate(...)`, plus the internal `parseCsvLine(line, delimiter)` / `escapeCsvField(field, quote)` (both arguments required — one gives wrong results). `toJSON` parses (handles quoting/escaping); `fromJSON` serializes (escapes fields; pass an explicit `headers` array to fix column order or drop columns).
   - `_json` — `distinct`, `groupBy`, `flatten`, `unflatten`, `merge`, `pick`, `omit`, `toCSV`, `parse`, `stringify`. ⚠️ `toCSV` throws in a script node — use `_csv.fromJSON`.
   - `_array` — `chunk`, `unique`, `flatten`, `groupBy`, `sortBy`, `pluck`, `sum`, `avg`, `min`, `max`, `intersect`, `difference`, `sample`, `shuffle`
   - `_string` — `slugify`, `capitalize`, `camelCase`, `snakeCase`, `kebabCase`, `truncate`, `template`, `stripHtml`, `escapeHtml`, `unescapeHtml`, `toBase64`, `fromBase64`, `pad`, `reverse`, `count`, `startsWith`, `endsWith`. ⚠️ `toBase64` / `fromBase64` throw `Buffer is not defined` in a script node.
@@ -281,7 +281,7 @@ Same globals as a script node, plus four shortcuts: `data` (= `$json()`), `execu
 - `status` / `body` keys mean nothing to the runner — `return { status: 404, body: {...} }` answers HTTP 200 with exactly that object. Return the body itself.
 - An array is spread into `{ "0": …, "1": … }` — wrap it: `return { products: data };`.
 - `return { data, headers }` sends `data` as the body and adds `headers` over the node's `config.headers`.
-- The HTTP status is 200 unless the run failed: 504 (timeout), 507 (memory), 500 (anything else), body `{ "error": { message, detail, errorType, nodeId } }`. A run stopped by its time or memory limit answers in the no-response-node shape instead (see "Triggering the runner directly").
+- The HTTP status is 200 unless the run failed: 504 (timeout), 507 (memory), 500 (anything else), body `{ "error": { message, detail, errorType, nodeId } }` — also for a workflow timeout the run answers gracefully (504, `errorType: "TimeoutError"`). Only a run the runner **kills** (out of memory → 507, or a timeout not answered within the 3 s grace → 504) answers in the no-response-node shape (see "Triggering the runner directly").
 
 ### `dcupl-files` — read/write cloud files
 
@@ -498,7 +498,7 @@ dcupl workflow undeploy --id <workflowUid> --yes
 - the console's **Test** panel with **Enable Data Trace** (console-api `POST …/workflows-v3/:id/triggers/:nodeId/invoke?dataTrace=true` adds the key);
 - `dcupl workflow test|run --node <id>` (test-node, always traced).
 
-`dcupl workflow test` / `run` **full runs call the runner directly with `dataTrace=true` but no runner key**, so on runners from `3.0.0-beta.21` they come back untraced: a success prints only the header line `Execution (unknown) — workflow <key>` (no nodes, no response body; `--json` gives `{ workflowKey }`), and a failure prints the runner's error envelope (below). For a full run's per-node status/duration/error use `dcupl workflow trace --id <uid> --last`; for the body, curl the runner (see "Triggering the runner directly"). Against an older runner, or for a traced run, `test`/`run` render the trace:
+`dcupl workflow test` / `run` **full runs call the runner directly with `dataTrace=true` but no runner key**, so on runners from `3.0.0-beta.21` they come back untraced: a success prints only a header line — `Execution (unknown) — workflow <key>` from `run`, `… — workflow (unknown)` from `test` — with no nodes and no response body (`--json`: `{ workflowKey }` from `run`, `{}` from `test`), and a failure prints the runner's error envelope (below). For a full run's per-node status/duration/error use `dcupl workflow trace --id <uid> --last`; for the body, curl the runner (see "Triggering the runner directly"). Against an older runner, or for a traced run, `test`/`run` render the trace:
 
 - **Node id** and type
 - **Status** — `ok` / `error` / `skipped`
@@ -574,7 +574,7 @@ URL parts: `<runnerUrl>` (with scheme) from `dcupl workflow runners list`; `<pro
 | a `response-status` | `{ status: "completed", executionId, duration }`; failed: `status: "failed"` + `error: { message, detail }` |
 | no response node | `{ status, executionId, data, metadata: { duration, nodesExecuted, itemsProcessed } }` — `data` holds the items of the nodes that end a branch; failed: `data: []` + `error` |
 
-A failed run answers 504 (timeout), 507 (memory) or 500; a run stopped by its time or memory limit answers in the no-response-node shape even when it has a Script Response. E.g. a script node failure behind a Script Response:
+A failed run answers 504 (timeout), 507 (memory) or 500. A graceful workflow timeout keeps the response node's failure shape (Script Response → `{ error: { …, errorType: "TimeoutError" } }`, `response-status` → `{ status: "failed", executionId, duration, error }`); only a run the runner **kills** — out of memory, or a timeout the child doesn't answer within the 3 s grace — answers in the no-response-node shape `{ status, executionId, data, error, metadata }`, whatever its response node. E.g. a script node failure behind a Script Response:
 
 ```json
 {"error":{"message":"csvToJson is not defined","detail":"ReferenceError: csvToJson is not defined …","errorType":"ReferenceError","nodeId":"clean"}}
