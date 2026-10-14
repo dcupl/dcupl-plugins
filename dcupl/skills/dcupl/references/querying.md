@@ -191,7 +191,7 @@ The `data` namespace has more verbs than `upsert`. Reach for these instead of de
 | Verb | Use |
 |---|---|
 | `app data upsert` | Insert or update records (most common). |
-| `app data update` | Update existing records only — no inserts. |
+| `app data update` | Update existing records by key — rows whose key matches no record (built, or staged by `set`/`upsert`) are skipped, never inserted; use `upsert` to add them. From CLI 1.4.0-beta.17 the reply is `{ updated, skipped, skippedKeys (≤ 20), model, built }` (dcupl/dcupl-cli#288; earlier betas answered `added: <row count>` even for skipped rows). Pass `--key-property` when the model was inferred by an upsert and is not built yet, otherwise every row reads as skipped. |
 | `app data set` | Full replace — drops existing records for the model, ingests the new set. Re-types columns based on the current model. |
 | `app data remove --model M --content '["k1","k2"]'` | Remove specific records by key (also takes `--file`). |
 | `app data reset --model M` | Drop all records for one model; keeps the model definition. |
@@ -215,6 +215,8 @@ dcupl app loaders remove --loader catalog               # detach
 ```
 
 `loaders process` is the verb to use when the user says "reload from console with a different env" mid-session — much cheaper than destroying the daemon.
+
+**One model key per app loader** (SDK 2.0.0-beta.34, dcupl/dcupl#424): a second loader whose config loads model files, view files or data for a key another loader of the same daemon already loads makes `loaders process` fail with `LOADER_PROCESS_FAILED` (`SharedModelKeyError`, naming the key and both loaders) and changes nothing. Split models across loaders by key, not by file. `loaders remove` drops what that loader loaded (its models, views and rows) on the next build; a model defined in code keeps its definition. Re-processing a loader (`loaders process` again) drops the resources that left its config and rebuilds the ones it loads from their current files — removed attributes disappear, changed types apply — and existing lists follow (dcupl/dcupl#414, #419).
 
 ## `fn groupBy --aggregate` for one-shot group-by-aggregate
 
