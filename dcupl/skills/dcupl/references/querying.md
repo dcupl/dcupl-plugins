@@ -119,7 +119,9 @@ dcupl app create --auto-update --json
 # 2. Load the CSV. --auto-generate-sample-size 100 lets dcupl walk up to 100 rows when
 #    inferring schema for *this* call — more reliable than the row-1-only default of
 #    --auto-generate-properties. --key-property tells dcupl which column is the unique id
-#    (no id column? pass --auto-generate-key instead and dcupl assigns one per record).
+#    (no id column? pass --auto-generate-key instead and dcupl assigns one per record;
+#    comma-separate for a composite key: --key-property id,lang → key "id::lang", CLI 1.4.0-beta.18 —
+#    earlier betas read "id,lang" as one column name and collapsed every row into one item).
 #    Semicolon-, tab- or pipe-separated CSVs are detected (CLI 1.4.0-beta.18; earlier betas
 #    read such a file as one column).
 dcupl app data upsert --file /path/to/products.csv --model Product --key-property id \
@@ -218,7 +220,7 @@ dcupl app loaders remove --loader catalog               # detach
 
 `loaders process` is the verb to use when the user says "reload from console with a different env" mid-session — much cheaper than destroying the daemon.
 
-**One model key per app loader** (SDK 2.0.0-beta.34, dcupl/dcupl#424): a second loader whose config loads model files, view files or data for a key another loader of the same daemon already loads makes `loaders process` fail with `LOADER_PROCESS_FAILED` (`SharedModelKeyError`, naming the key and both loaders) and changes nothing. Split models across loaders by key, not by file. `loaders remove` drops what that loader loaded (its models, views and rows) on the next build; a model defined in code keeps its definition. Re-processing a loader (`loaders process` again) drops the resources that left its config and rebuilds the ones it loads from their current files — removed attributes disappear, changed types apply — and existing lists follow (dcupl/dcupl#414, #419).
+**One model key per app loader** (SDK 2.0.0-beta.34, dcupl/dcupl#424): a second loader whose config loads model files, view files or data for a key another loader of the same daemon already loads makes `loaders process` fail with `LOADER_SHARED_MODEL_KEY` and the SDK's `SharedModelKeyError` message naming the key and both loaders (CLI 1.4.0-beta.18, dcupl/dcupl-cli#295; earlier betas report the generic `LOADER_PROCESS_FAILED`) and changes nothing. Split models across loaders by key, not by file. `loaders remove` marks the app dirty (and builds right away with `--auto-update`; the command warns about pending changes like the data commands — CLI 1.4.0-beta.18, dcupl/dcupl-cli#295; earlier betas detached the loader without marking anything, so queries kept serving its models and data) and drops what that loader loaded (its models, views and rows) on the next build; a model defined in code keeps its definition. Re-processing a loader (`loaders process` again) drops the resources that left its config and rebuilds the ones it loads from their current files — removed attributes disappear, changed types apply — and existing lists follow (dcupl/dcupl#414, #419).
 
 ## `fn groupBy --aggregate` for one-shot group-by-aggregate
 
