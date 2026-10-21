@@ -9,6 +9,7 @@
 | Flag | Default | Purpose |
 |---|---|---|
 | `--from <file>` | required | Source file: `.csv`, `.json`, or `.ndjson` |
+| `--delimiter <d>` | detected | CSV column delimiter: `,` `;` `tab` `\|` (or `comma` / `semicolon` / `tab` / `pipe`). Beats detection; the escape hatch for a genuine single-column file (CLI 1.4.0-beta.18) |
 | `--name <key>` | filename basename, lowercased | Override the model key |
 | `--register` | off | Also writes a `model` + `data` resource pair to `dcupl.lc.json` |
 | `--sample-size <n>` | all rows | Limit rows scanned for type inference |
@@ -23,19 +24,23 @@ dcupl generate model --from products.csv
 dcupl generate model --from products.csv --name products --register --sample-size 500
 ```
 
+**CSV delimiter detection** (CLI 1.4.0-beta.18, dcupl/dcupl-cli#303): for a `.csv` source the CLI counts the columns of the header and the first 50 rows (quote-aware) with each of `,` `;` tab and `|`; the delimiter whose column count holds on every row wins (ties go to the higher count). A semicolon export with decimal commas (`1;Cable;4,99`) resolves to `;`. The result is printed — `Delimiter: ';' (detected from the header and first 50 rows), 4 columns.` (`delimiter` / `delimiterSource` in `--json`). When no delimiter yields more than one column the command fails with `GENERATE_NO_DELIMITER` (exit 1) instead of writing a one-column model; pass `--delimiter` for a genuine single-column file (an unknown value is `GENERATE_BAD_DELIMITER`). Earlier betas parsed a `;` export as one column and still reported "All columns inferred cleanly" — on those, pre-convert the file or set `csvParserOptions.delimiter` on the data resource by hand.
+
 ## Type inference rules
 
 | Value seen in data | Inferred type | Notes |
 |---|---|---|
 | `"42"` (integer string) | `int` | Whole numbers only. |
 | `"3.14"`, `"9.99"` | `float` | Any decimal. |
-| `"true"` / `"false"` | `boolean` | Exact strings, case-sensitive. |
+| `"true"` / `"false"` | `boolean` | Case-insensitive (`TRUE`, `False`) from SDK 2.0.0-beta.32 (dcupl/dcupl#388); earlier betas matched lowercase only. `1`/`0` columns stay `int`. |
 | `"2024-01-31"` or `"2024-01-31T10:00:00Z"` | `date` | Strict ISO-8601 only. |
 | Mixed int + float | `float` | Silent promotion; no warning. |
 | `"[\"a\",\"b\"]"` (JSON array *string* in a CSV cell) | `string` | A stringified array is just a string; only a native object/array value infers as `json`. |
 | Genuinely mixed types (e.g. int + string) | `any` | Needs manual resolution. |
 | Ambiguous date (`"01/07/2024"`) | `string` + date-like warning | Promote with `inputFormat`. |
 | Anything else | `string` | Safe default. |
+
+**Boolean values at load time** (SDK 2.0.0-beta.32, dcupl/dcupl#388, #403): the strings `true`/`false`/`1`/`0` (case-insensitive, no trimming) and the numbers `1`/`0` become booleans; any other string, number, object or array is a `WrongDataType` with no value — `'yes'`, `'no'`, `''` or `2` no longer load as `true`/`false`, so map them with `valueMappings` first. Earlier 2.0 betas coerced by truthiness (`'false'` → `true`). An empty CSV cell in a declared boolean column is still "no value" (`UndefinedValue` when required), not a `WrongDataType`.
 
 ## Diagnostics warnings
 
@@ -62,7 +67,7 @@ Two resource entries are appended — one `model` and one `data`:
 }
 ```
 
-`--register` appends a `model` resource (`${baseUrl}/models/<file>`) and a `data` resource (`${baseUrl}/data/<basename>`), both correctly prefixed. The full data-resource shape (part of `AppLoaderConfiguration`'s Resource union — there is no standalone `DataResource` schema; see `dcupl schemas get AppLoaderConfiguration --example`) also accepts `options.keyProperty`, `options.autoGenerateKey`, and `options.csvParserOptions` (`delimiter`, `quoteChar`, `escapeChar`, `commentChar`).
+`--register` appends a `model` resource (`${baseUrl}/models/<file>`) and a `data` resource (`${baseUrl}/data/<basename>`), both correctly prefixed. The full data-resource shape (part of `AppLoaderConfiguration`'s Resource union — there is no standalone `DataResource` schema; see `dcupl schemas get AppLoaderConfiguration --example`) also accepts `options.keyProperty`, `options.autoGenerateKey`, and `options.csvParserOptions` (`delimiter`, `quoteChar`, `escapeChar`, `commentChar`). For a CSV source the registered data resource carries the delimiter the model was inferred with (detected or `--delimiter`) as `options.csvParserOptions.delimiter`, so the loader parses the file the same way the generator did (CLI 1.4.0-beta.18).
 
 ⚠ Only set `keyProperty` to a column you have verified is unique — collisions overwrite rows silently with no error. See "Keying data resources" in `SKILL.md`.
 
