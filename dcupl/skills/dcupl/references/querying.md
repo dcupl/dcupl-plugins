@@ -120,6 +120,8 @@ dcupl app create --auto-update --json
 #    inferring schema for *this* call — more reliable than the row-1-only default of
 #    --auto-generate-properties. --key-property tells dcupl which column is the unique id
 #    (no id column? pass --auto-generate-key instead and dcupl assigns one per record).
+#    Semicolon-, tab- or pipe-separated CSVs are detected (CLI 1.4.0-beta.18; earlier betas
+#    read such a file as one column).
 dcupl app data upsert --file /path/to/products.csv --model Product --key-property id \
   --auto-generate-sample-size 100 --json
 # → {"upserted":3,"model":"Product","built":true}
