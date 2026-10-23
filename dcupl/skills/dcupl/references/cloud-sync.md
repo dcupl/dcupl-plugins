@@ -131,7 +131,7 @@ dcupl files push --concurrency 2         # fewer parallel transfers (slow link /
 - `--concurrency <n>` — max parallel file transfers on `push`/`pull` (default 4). Lower it for very large files or slow links. Not validated: a value below 1 or non-numeric is silently ignored and the default 4 applies — pass `--concurrency 1` explicitly to serialise transfers.
 - `--json` — JSON output (default is human-readable).
 
-**Guardrails.** `push` rejects `--version production` — publish there via `files versions copy` instead. `pull` refuses to switch to a different version when the workspace is dirty unless you pass `--force`.
+**Guardrails.** `push` rejects `--version production` — publish there via `files versions copy` instead. `push` also rejects `--name` (CLI ≥ 1.4.0-beta.19, `PUSH_NAME_NOT_SUPPORTED` in `--json`): named versions are created in the console, not from the CLI (#306). `pull` refuses to switch to a different version when the workspace is dirty unless you pass `--force`.
 
 **What can be synced.** The dcupl CDN stores **text files only**, enforced client-side before any request is sent:
 
