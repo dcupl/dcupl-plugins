@@ -78,7 +78,7 @@ Then summarize what you found and surface 1-2 notable patterns. Skip this for na
 - `MODEL_NOT_FOUND` doesn't mean "create the model"; the user might have typo'd a name. Run `app models keys --json` and confirm.
 - `MULTIPLE_APPS` means there's >1 daemon running. Run `app list --json`, ask the user which they meant, or infer from `cwd` if you can.
 - `NETWORK` (daemon unreachable) means the registry still lists a daemon whose process is gone (crashed, or killed out-of-band). Crashed entries are kept on purpose so you can inspect them: `app list --json` marks them `status: "crashed"`, `app status --app <id> --json` returns `status: "crashed"` plus `logPath` and a `logTail`, and `app logs --app <id> [--lines N]` prints the daemon's log. Clean up with `app destroy --app <id>` (it tolerates the unreachable daemon and removes the registry entry), then `app create` again.
-- `UNKNOWN_OPTION` / `PARSE_ERROR` / `PROJECTION_INVALID_SHAPE` are your fault — a mistyped flag, a missing argument, or a malformed `--projection`. `UNKNOWN_OPTION` usually carries a "Did you mean …?" hint; re-read the command's option requirements (`--help`).
+- `UNKNOWN_OPTION` / `PARSE_ERROR` / `PROJECTION_INVALID_SHAPE` are your fault — a mistyped flag, a missing argument, or a malformed `--projection`. Since CLI 1.4.0-beta.20 a `--query` that isn't JSON or isn't a condition/group shape (e.g. `filters` instead of `queries`, `operator: "and"` instead of `groupType`) is a `PARSE_ERROR` with the expected shape, not `INTERNAL`; since 1.4.0-beta.21 so is an operator that is neither built-in nor a registered custom operator (e.g. `contains`) — the message and `details.validOperators` list the valid ones (before, such a condition matched nothing, silently). `UNKNOWN_OPTION` usually carries a "Did you mean …?" hint; re-read the command's option requirements (`--help`).
 - `TYPE_MISMATCH` (only from `fn aggregate`): the user asked for `avg`/`sum` on a non-numeric column. The error message names the column and its current type — fix is `models set` with the right type, then `data set` (full replace) to re-type existing rows.
 
 **7. Suggest follow-ups.** After answering an analytical question, offer 1-2 natural next steps. This helps users discover what dcupl can do and surfaces follow-on insights they hadn't considered.
@@ -237,7 +237,7 @@ dcupl app fn groupBy --model Order --attribute customer \
 
 Each group entry comes back with an `_aggregates` array containing the requested computations. Vastly more efficient than looping `fn aggregate --query` per group.
 
-`fn groupBy` also orders and paginates its groups: `--sort <attr>:ASC|DESC` (e.g. `--sort price:DESC`), `--limit N` and `--start N` (0-based offset). Use these for a top-N of groups instead of pulling every group and trimming client-side.
+`fn groupBy` also orders and paginates its groups: `--sort key|size|<attribute>_<type>[:ASC|DESC]` orders the **groups** — by group key, by size, or by a requested `--aggregate` (e.g. `--aggregate price:avg --sort price_avg:DESC`) — and `--limit N` / `--start N` (0-based offset) apply after sorting. Use these for a top-N of groups instead of pulling every group and trimming client-side. A plain model attribute (`--sort price:DESC`) orders the **items inside** each group, not the groups. An unknown sort key or direction, or mixing both kinds in one `--sort`, fails with `PARSE_ERROR` naming the accepted keys (CLI ≥ 1.4.0-beta.20; earlier betas crashed with `INTERNAL`).
 
 ## `fn aggregate` flags
 
@@ -404,7 +404,7 @@ For most exploratory work, a single condition via `--query` is enough. Use `--qu
 
 `query execute` accepts:
 
-- `--sort price:DESC,name:ASC` — comma-separated `attr:DIR` pairs (DIR is `ASC` or `DESC`, default `ASC`)
+- `--sort price:DESC,name:ASC` — comma-separated `attr:DIR` pairs (DIR is `ASC` or `DESC`, default `ASC`; any other direction is a `PARSE_ERROR` since CLI 1.4.0-beta.20)
 - `--limit 10` and `--start 20` — pagination. `--start` is a **0-based offset**: records 100–110 of a sorted result = `--start 100 --limit 11`
 - `--projection` — pick which fields to return; three equivalent forms:
   - Object: `--projection '{"id":true,"name":true}'` (use `false` to exclude)
