@@ -26,8 +26,9 @@ These make a workflow legible to the user and to whoever maintains it next. None
 
 - **Node:** `id`, `name?`, `description?`, `nodeClass` (`trigger` | `step` | `response`), `type`, `inputs`, `outputs`, `config`. `inputs`/`outputs` are **required arrays** (`validate` fails with `expected array, received undefined`); triggers have `inputs: []`, responses `outputs: []`. Steps also take `merge` (combines several input ports; needs ≥ 2, `merge-by-key` needs `key`) and `skip: true` (runs nothing, sends nothing on).
 - **Edge:** `id`, `source: { nodeId, port }`, `target: { nodeId, port }`.
-- **`variables`:** `[{ name, value, description }]`, resolved **at deploy** — deploy overrides > project variables (Global Workflow Variables) > the template's own — so redeploy after changing one. Read with `{{variables.name}}` in config, `$context.variables.name` in scripts.
-- **Accepted but ignored by the runner** (leave out): edge `condition` / `transform` / `config.bufferSize` (an edge holds up to 1,000,000 items regardless), node `executionMode` / `batchSize` (every node takes its whole input at once), `merge.timeout`, and the template's `config.catch` (a workflow-wide error node — route errors through each node's `error` port instead).
+- **`variables`:** `[{ name, value, description }]` or a flat `{ "name": "value" }` map (string values only; the map is what console-api deploys and the runner reads — SDK ≥ 2.0.0-beta.41 accepts both, dcupl/dcupl#327), resolved **at deploy** — deploy overrides > project variables (Global Workflow Variables) > the template's own — so redeploy after changing one. Read with `{{variables.name}}` in config, `$context.variables.name` in scripts.
+- **Accepted but ignored by the runner** (leave out): edge `condition` / `transform` (an edge holds up to 1,000,000 items regardless).
+- **Removed from the V3 schema** (SDK ≥ 2.0.0-beta.41, CLI ≥ 1.4.0-beta.21, dcupl/dcupl#480): edge `config` (its only field was `bufferSize`), node `executionMode` / `batchSize` (every node takes its whole input at once), `merge.timeout`, and the template's `config.catch` (route errors through each node's `error` port instead). The runner never read them. A stored template that still has them parses and the fields are stripped; don't write them, and `dcupl schemas get TemplateV3` no longer lists them.
 
 ## Node-type catalog
 
