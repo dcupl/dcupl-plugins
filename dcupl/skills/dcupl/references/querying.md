@@ -2,6 +2,8 @@
 
 The `dcupl app` CLI starts a per-app daemon that holds a dcupl instance in memory, then exposes the dcupl SDK (models, data, query, fn) as CLI commands. Once data is loaded, queries are fast because everything is indexed in memory. Use it for exploratory data analysis when there's a tabular dataset to investigate.
 
+> **Connected to a deployed dcupl application through MCP tools** (`models`, `guide`, `query`, `facet`, `aggregate`, `pivot`, `metadata`, `suggest` in your tool list)? Skip the daemon: read only ["Querying via MCP"](#querying-via-mcp) at the end of this file and the operator table under "Query language".
+
 ## When this applies
 
 Trigger when the user has tabular data (CSV/JSON/NDJSON) and asks an analytical question, especially:
@@ -351,17 +353,22 @@ The daemon wraps this into a full query group automatically.
 
 **Operators:**
 
-| Op | Meaning | Example |
+<!-- operator-semantics:start (the Semantics column is the wording of `operatorDescriptions` in the shared query schema of @dcupl/common-internal; kept in sync by scripts/check-operator-table.mjs in dcupl/dcupl-plugins, not edited by hand) -->
+| Op | Semantics | Example |
 |---|---|---|
-| `eq` | exact equality | `{"operator":"eq","attribute":"status","value":"active"}` |
-| `gt`, `gte`, `lt`, `lte` | numeric comparison | `{"operator":"gt","attribute":"price","value":100}` |
-| `find` | **exact match** (bare string) or regex match (slashes) — see below | `{"operator":"find","attribute":"name","value":"/^Sneaker/"}` |
-| `typeof` | value type check | `{"operator":"typeof","attribute":"x","value":"string"}` |
-| `isTruthy` | truthy/falsy | `{"operator":"isTruthy","attribute":"x","value":true}` |
-| `size` | array size | `{"operator":"size","attribute":"tags","value":3}` |
-| `in` | equals **any** listed value (SDK ≥ 2.0.0-beta.21) | `{"operator":"in","attribute":"status","value":["active","paused"]}` |
+| `eq` | attribute equals value (the whole value, no substring match). | `{"operator":"eq","attribute":"status","value":"active"}` |
+| `in` | value is an array; matches if the attribute equals any of its entries. | `{"operator":"in","attribute":"status","value":["active","paused"]}` |
+| `find` | plain string = exact whole value; "/…/" = JS regex (flags via options.regexFlags); object = property match. | `{"operator":"find","attribute":"name","value":"/^Sneaker/"}` |
+| `gt` | greater than value; a number (epoch ms for date attributes), strings compare lexically. | `{"operator":"gt","attribute":"price","value":100}` |
+| `gte` | greater than or equal to value; a number (epoch ms for date attributes). | `{"operator":"gte","attribute":"price","value":100}` |
+| `lt` | less than value; a number (epoch ms for date attributes), strings compare lexically. | `{"operator":"lt","attribute":"price","value":100}` |
+| `lte` | less than or equal to value; a number (epoch ms for date attributes). | `{"operator":"lte","attribute":"price","value":100}` |
+| `typeof` | JS type of the attribute equals value, e.g. "string", "number", "boolean", "object". | `{"operator":"typeof","attribute":"x","value":"string"}` |
+| `isTruthy` | value true = non-empty; false = null, undefined, "" or 0 (the null/empty filter). | `{"operator":"isTruthy","attribute":"x","value":true}` |
+| `size` | array (or string) length equals value, a number. | `{"operator":"size","attribute":"tags","value":3}` |
+<!-- operator-semantics:end -->
 
-`gt`/`lt` etc. require a numeric column (see "numeric-types gotcha" above).
+`gt`/`gte`/`lt`/`lte` compare with JS `<`/`>`: a column typed `string` compares lexically (`"9"` > `"100"`), so type it `int`/`float` first (see "numeric-types gotcha" above). A `date` attribute compares with epoch milliseconds; an ISO string matches nothing. `in` needs SDK ≥ 2.0.0-beta.21.
 
 **Any-of:** `eq` with an array value compares the *whole* array, so `{"operator":"eq","attribute":"status","value":["a","b"]}` matches nothing on a string column. Use `in` (SDK ≥ 2.0.0-beta.21), or on older SDKs an `or` group with one `eq` per value. `in` uses `eq`'s equality, `"options":{"invert":true}` makes it NOT IN, and an empty list matches nothing.
 
@@ -600,3 +607,82 @@ The agent's flow:
    > ```
 
 6. **Leave the daemon running** for follow-ups. Don't `destroy` unless the user signals they're done. Optionally offer: *"Want me to drill into a specific category, or anything else? The daemon's still up — I can also clean it up now if you're done."*
+
+## Querying via MCP
+
+A deployed dcupl application (an app-runner instance whose REST API template sets `mcp: { enabled: true }`) serves the same query engine as read-only MCP tools at `POST <runner>/instance/<instanceKey>/mcp` (Streamable HTTP, same api key as the instance's REST routes). When they are in your tool list, call them directly: `models`, `guide`, `query`, `aggregate`, `facet`, `pivot`, `metadata`, `suggest`, plus one `endpoint_*` tool per scripted endpoint of the application. Nothing above about daemons, ingest, `--auto-update` or `--json` applies: no app to create, no file to load, nothing to destroy.
+
+**MCP tools or a local daemon?**
+
+- **MCP tools** — the question is about data a deployed instance already holds and its tools are connected. No files to load, no CLI needed, and the answer comes from the deployed data.
+- **Local daemon** — the data is in local files (a CSV/JSON, a workspace that isn't deployed), you need to change models or data, or no dcupl MCP server is connected. The MCP tools are read-only and cannot load a file.
+- Don't start a daemon for a question the MCP tools answer, and don't work out a CLI command first to translate it: use the table below.
+
+**First calls.** `models` (model keys and item counts; every other tool takes one as `modelKey`), then `guide` (no arguments): markdown with this instance's models and attributes, the dotted reference paths, its scripted endpoints, a worked example per tool with real attribute names, and the conventions. A client with resource support reads the same text as the resource `dcupl://instance/<instanceKey>/guide`. The guide is specific to the instance; this section is the part that holds for every instance.
+
+**Tool ↔ CLI verb**
+
+| MCP tool and arguments | CLI verb (sections above) |
+|---|---|
+| `models` | `app models keys`, `app status` |
+| `guide` | — |
+| `query` `{ modelKey, queries, count, start }` | `query execute --model M --query '…' --limit N --start N` |
+| `query` … `sort: { attributes: ["price"], order: ["DESC"] }` | `--sort price:DESC` |
+| `query` … `projection: { "name": true }` | `--projection name` |
+| `facet` `{ modelKey, options: { attribute, count, sort } }` | `fn facets --attribute X --limit N --sort size-desc` |
+| `aggregate` `{ modelKey, options: { attribute, types } }` | `fn aggregate --attribute X --types min,max,avg` |
+| `pivot` `{ modelKey, options: { rows: [{ attribute }], columns: [], values: [{ attribute, types }] } }` | `fn groupBy --attribute Y --aggregate price:avg` (there is no `groupBy` tool) |
+| `pivot` with `columns: [{ attribute }]` | `fn pivot --rows Y --columns Z --values price:avg` |
+| `metadata` `{ modelKey, query? }` | `fn metadata [--query '…']` |
+| `suggest` `{ modelKey, options: { attribute, value, max } }` | `fn suggest --attribute X --value foo --max N` |
+| nested `query: { queries: [...] }` on `facet`, `aggregate`, `pivot`, `metadata`, `suggest` | `--query '…'` on the `fn` verbs |
+| `endpoint_*` | — (the application's own script; prefer one that fits the question) |
+
+**Where the tools differ from the CLI**
+
+- **Paging is `count` and `start`, not `limit`.** `query` returns at most `count` items (default 100, **max 1000**) from the 0-based offset `start`. `count: 1001` fails with `Too big: expected number to be <=1000 at count`. `limit` is not an argument: it is ignored without an error and you get the default 100. For more than 1000 items page with `start` (`start: 1000`, `start: 2000`, …); for a total use `metadata` or `aggregate`, never paging.
+- **Conditions always sit in a `queries` array.** `--query` takes a bare condition; the `query` tool takes `queries: [ … ]` (several entries are ANDed, `[]` or omitted matches all), and the other tools take a nested `query: { queries: [ … ] }` whose `modelKey` defaults to the tool's. For OR set `groupType: "or"`, or nest `{ "groupType": "or", "queries": [ … ] }` as an entry.
+- **Operators are the ones in the table under "Query language"**, the same shared schema: `find` with a plain string is an exact whole-value match, `"/…/"` is a regex, flags go in `options.regexFlags`. An operator name that is neither built in nor a custom operator registered on the instance is rejected with an error.
+- **`sort` is two parallel arrays**, `attributes` and `order`, one upper-case `ASC` or `DESC` per attribute: `--sort price:DESC,name:ASC` is `{ "attributes": ["price","name"], "order": ["DESC","ASC"] }`.
+- **`facet` and `suggest` cap with their own keys**: `options.count` on `facet` (with `options.sort: "size-desc"` for a top-N), `options.max` on `suggest` (default 20).
+- **Results are the SDK's JSON, not the CLI's compact shapes.** A `facet` entry is `{ key, value, size, resultKeys, … }`: the item count is `size` (the CLI prints it as `count`). `metadata` answers `{ currentSize, initialSize, attributes }`: `currentSize` is the count under the nested `query`. `pivot` answers nested `rows[].rows[]`, each with `values[]`.
+- **Keys and references.** An item `key` is a string (`"value": "42"`, not `42`). A reference comes back as `{ key }`; filter, facet, aggregate or pivot on the target's attributes with a dotted path (`vendorId.country`), inline them with a nested projection (`{ "vendorId": { "country": true } }`).
+- **Errors name the field** (`expected one of "ASC"|"DESC" at sort.order[0]`): fix that field and call again. An empty result usually means a wrong value or case: check it with `facet` or `suggest` before reporting none.
+
+**One example per tool** (arguments only; `Product` with `name`, `category`, `price`). `models` and `guide` take no arguments.
+
+`query` — the second page of ten of the most expensive shoes:
+
+```json
+{"modelKey":"Product","queries":[{"operator":"eq","attribute":"category","value":"shoes"}],"sort":{"attributes":["price"],"order":["DESC"]},"projection":{"name":true,"price":true},"count":10,"start":10}
+```
+
+`facet` — the ten most frequent categories:
+
+```json
+{"modelKey":"Product","options":{"attribute":"category","sort":"size-desc","count":10}}
+```
+
+`aggregate` — the average price of shoes:
+
+```json
+{"modelKey":"Product","options":{"attribute":"price","types":["avg"]},"query":{"queries":[{"operator":"eq","attribute":"category","value":"shoes"}]}}
+```
+
+`pivot` — the average price per category (the `fn groupBy --aggregate price:avg` case; `columns` is required, `[]` for one dimension):
+
+```json
+{"modelKey":"Product","options":{"rows":[{"attribute":"category"}],"columns":[],"values":[{"attribute":"price","types":["avg"]}]}}
+```
+
+`metadata` — how many products cost more than 100 (`currentSize`):
+
+```json
+{"modelKey":"Product","query":{"queries":[{"operator":"gt","attribute":"price","value":100}]}}
+```
+
+`suggest` — the names that start with "snea" in any case (a plain value is a case-insensitive prefix, unlike `find`):
+
+```json
+{"modelKey":"Product","options":{"attribute":"name","value":"snea","max":5}}
+```
