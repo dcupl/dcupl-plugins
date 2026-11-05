@@ -176,7 +176,7 @@ Read the user's question, then pick:
 | "What's the min/max/avg/sum of X?" | `fn aggregate` | `--model M --attribute X --types min,max,avg` |
 | "How does X break down by Y?" | `fn groupBy` | `--model M --attribute Y` (sizes per group). Add `--aggregate price:avg` for per-group stats. **One attribute per call** — for X × Y cross-tabs use `fn pivot` (see "Cross-tabs" under Common patterns). |
 | "X by Y *and* Z" (cross-tab / matrix) | `fn pivot` | `--model M --rows Y --columns Z --values X:avg` |
-| "How are values of X distributed across ranges?" (histogram) | `fn aggregate --bins` | `--model M --attribute X --bins 0-100,100-200,200-` |
+| "How are values of X distributed across ranges?" (histogram) | `fn aggregate --bins` | `--model M --attribute X --bins 0-100,100-200,200-500` |
 | "Which values of X start with / look like 'foo'?" (typeahead) | `fn suggest` | `--model M --attribute X --value foo [--max 10]` |
 | "How many records match this filter?" | `fn metadata` (with `--query`) or count `query execute` | `--model M --query '{...}'` returns `currentSize` |
 | "Show me records matching this filter, sorted, paginated" | `query execute` | `--model M --query '{...}' --sort price:DESC --limit 10` |
@@ -244,15 +244,15 @@ Each group entry comes back with an `_aggregates` array containing the requested
 ## `fn aggregate` flags
 
 - `--types distinct,count,sum,avg,min,max,group` — comma-separated. Optional when a grouping flag below is present.
-- `--bins 0-100,100-200,200-` — the histogram tool: comma-separated numeric ranges (`from-to`, open-ended `200-` or `-100` allowed) that become `group` buckets; `group` is added to `--types` for you. `--group-options '<json>'` / `--group-options-file <path>` pass a full SDK `groupOptions` object instead (mutually exclusive with `--bins`).
+- `--bins 0-100,100-200,200-500` — the histogram tool: comma-separated numeric ranges (`from-to`) that become `group` buckets. Give both bounds and check the counts against `count`: today an open-ended `200-` or `-100` counts 0 and a value equal to a bound lands in no bin (dcupl/dcupl#511); `group` is added to `--types` for you. `--group-options '<json>'` / `--group-options-file <path>` pass a full SDK `groupOptions` object instead (mutually exclusive with `--bins`).
 - `--query '<json>'` — scope the aggregation to a subset (e.g. avg price *of shoes only*).
 - `--include-keys` — when computing `distinct`, include the matching record ids per value. Default is to omit them (the SDK can be expensive on sparse columns; default-compact saves bandwidth).
 - `--distinct-limit N` — cap the number of `distinct` values returned.
-- `--exclude-zeros` / `--exclude-undefineds` / `--exclude-unresolved` — leave those values out of the computation.
+- `--exclude-undefineds` — leave the records without a value out of `distinct`; the other types ignore it. `--exclude-zeros` and `--exclude-unresolved` are accepted but have no effect on `fn aggregate` (dcupl/dcupl-cli#335): leave records out with `--query`.
 
 ```bash
 # Price histogram in three buckets (no --types needed)
-dcupl app fn aggregate --model Product --attribute price --bins 0-50,50-100,100- --json
+dcupl app fn aggregate --model Product --attribute price --bins 0-50,50-100,100-500 --json
 ```
 
 ## `fn facets` output flags
