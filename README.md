@@ -90,8 +90,19 @@ change to the skill and whenever that schema changes:
 git -C ../dcupl fetch origin                   # the guard reads origin/main of the checkout next to this repo
 node scripts/check-operator-table.mjs          # exit 1 and one line per difference when the table drifted
 node scripts/check-operator-table.mjs --write  # copy the schema wording into the table, examples kept
-node --test                                    # the guard's own unit tests
+node --test                                    # the guard's unit tests and the frontmatter limits
 ```
+
+The guard exits 0 when the table matches, 1 when it differs or is malformed and
+2 when it could not check (unreadable schema, unknown flag). A match is one row
+per operator, in schema order, with the schema's wording; between the markers
+there is the table only. `--write` never deletes the row of an operator the
+schema does not list.
+
+`node --test` also runs `scripts/skill-frontmatter.test.mjs`: every `SKILL.md`
+in the repo keeps its `name` within 64 and its `description` within 1024
+characters, the limits of the skill format (`claude plugin validate` does not
+check them). Run it after every change to a skill's frontmatter.
 
 It needs Node 20+ and no install or network: the schema is read with `git show`
 from the `dcupl` checkout (`--dcupl-repo <dir>` / `DCUPL_REPO`, `--ref` /
