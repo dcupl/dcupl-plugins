@@ -49,9 +49,10 @@ Other useful commands:
 ```
 dcupl-plugins/                          # the marketplace (this repo)
 ├── .claude-plugin/marketplace.json     # marketplace catalog — lists the plugins
-└── dcupl/                              # the "dcupl" plugin
-    ├── .claude-plugin/plugin.json      # plugin manifest
-    └── skills/dcupl/                   # the "dcupl" skill (SKILL.md + references/)
+├── dcupl/                              # the "dcupl" plugin
+│   ├── .claude-plugin/plugin.json      # plugin manifest
+│   └── skills/dcupl/                   # the "dcupl" skill (SKILL.md + references/)
+└── scripts/                            # repo checks (see "Checks"), not part of a plugin
 ```
 
 Add more plugins as sibling folders under the repo root (e.g. `dcupl-pm/`), each
@@ -75,3 +76,50 @@ from a local path:
 /plugin marketplace add ./path/to/dcupl-plugins
 /plugin install dcupl@dcupl-plugins
 ```
+
+## Checks
+
+The operator table in `dcupl/skills/dcupl/references/querying.md` (between the
+`operator-semantics` markers) states each built-in query operator in the wording
+of `operatorDescriptions` in `@dcupl/common-internal`
+(`packages/common-internal/src/query-api/query-api.schemas.ts` in `dcupl/dcupl`),
+the schema REST and the MCP tools validate with. Run the guard before pushing a
+change to the skill and whenever that schema changes:
+
+```
+git -C ../dcupl fetch origin                   # the guard reads origin/main of the checkout next to this repo
+node scripts/check-operator-table.mjs          # exit 1 and one line per difference when the table drifted
+node scripts/check-operator-table.mjs --write  # copy the schema wording into the table, examples kept
+node --test                                    # the guard's unit tests and the frontmatter limits
+```
+
+The guard exits 0 when the table matches, 1 when it differs or is malformed and
+2 when it could not check (unreadable schema, unreadable skill file, unknown
+flag). Its output names the commit of `dcupl` it read (`… at origin/main (commit
+c389f377 of 2026-11-05)`): an old commit there means the `git fetch` was skipped.
+
+A match is one row per operator, in schema order, with the schema's wording and
+three cells; the Example cell is empty or a `code` example, and a JSON example
+names the row's operator. Every pair of markers in the file is checked. Between
+the markers there is the table only, and a table row sits between them, not
+right before or after. A `|` inside a cell is written `\|`, also inside `code`.
+
+`--write` replaces the Semantics cell of a row that differs and leaves every
+other byte of the row as written (the example with its `\|`, the padding); a row
+that matches is not touched. It adds missing rows, restores the order, drops
+duplicates and never deletes the row of an operator the schema does not list.
+
+`node --test` also runs `scripts/skill-frontmatter.test.mjs`: every `SKILL.md`
+in the repo keeps its `name` within 64 and its `description` within 1024
+characters, the limits of the skill format (`claude plugin validate` does not
+check them). The value is measured as a YAML parser reads it: plain or quoted,
+on one line or wrapped onto further lines, or a block scalar (`>`, `|`). A value
+the test cannot measure as a whole (a `: ` in an unquoted value, a list, a
+nested map) fails it. Run it after every change to a skill's frontmatter.
+
+It needs Node 20+ and no install or network: the schema is read with `git show`
+from the `dcupl` checkout (`--dcupl-repo <dir>` / `DCUPL_REPO`, `--ref` /
+`DCUPL_REF`), or from a file with `--schema <query-api.schemas.ts>` /
+`DCUPL_SCHEMA_FILE`. `scripts/` is outside the plugin folder and is not installed
+with the plugin. There is no CI job: `dcupl/dcupl` is private, so a workflow in
+this public repo cannot read the schema without a secret.

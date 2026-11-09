@@ -1,6 +1,6 @@
 ---
 name: dcupl
-description: Use when working with the dcupl ecosystem in any way — authoring data models, app loader configurations (`dcupl.lc.json`), or workflow templates (v3); querying tabular data via the `dcupl app` daemon (facets, aggregations, filtered queries); writing dcupl scripts (custom operators, sort or `endpoint` scripts) or scripted endpoints on a REST API template (`api/*.api.json`); scaffolding via `dcupl init` / `dcupl generate`; credentials via `dcupl config set` / `config get`; or syncing files with the dcupl cloud via `dcupl files <subcommand>` (status/push/pull, `files versions`). Trigger on phrases like "write a model", "build a workflow", "configure a loader", "what fields does a ModelDefinition have", "how many X are there", "breakdown by Y", "push files to dcupl", "pull from dcupl", "what changed", "configure my dcupl credentials", "set up apiKey", "write a script", "custom operator", "add an endpoint", or when the user works with `*.dcupl.json`, `dcupl.lc.json`, `api/*.api.json`, or workflow templates.
+description: Use for any dcupl ecosystem work — authoring data models, app loader configs (`dcupl.lc.json`), or workflow templates (v3); querying tabular data via the `dcupl app` daemon or a deployed application's MCP tools (facets, aggregations, filtered queries); writing dcupl scripts (custom operators, sort or `endpoint` scripts) or scripted endpoints on a REST API template (`api/*.api.json`); scaffolding via `dcupl init` / `dcupl generate`; credentials via `dcupl config set` / `config get`; or syncing files with the dcupl cloud via `dcupl files` (status/push/pull, `files versions`). Trigger on phrases like "write a model", "build a workflow", "configure a loader", "what fields does a ModelDefinition have", "how many X are there", "breakdown by Y", "push files to dcupl", "pull from dcupl", "what changed", "configure my dcupl credentials", "set up apiKey", "write a script", "custom operator", "add an endpoint", or when the user works with `*.dcupl.json`, `dcupl.lc.json`, `api/*.api.json`, or workflow templates.
 ---
 
 # dcupl
@@ -47,11 +47,16 @@ Unknown flags and subcommands on a current CLI fail loudly — `dcupl app query 
 
 **Which CDN host `--source remote` talks to** (CLI 1.4.0-beta.4+, dcupl/dcupl-cli#139 — older CLIs always hit the prod CDN and ignore `consoleApiUrl`): `--cdn-base-url <url>` > `DCUPL_CDN_BASE_URL` env > `cdnBaseUrl` in `dcupl.config.json` > mapping from `consoleApiUrl` (`api.dcupl.com` → `cdn.dcupl.com`, `api.dev.dcupl.com` → `cdn.dev.dcupl.com`; the old `dev.api` → `dev-cdn` pair still works) > SDK default (prod). Develop hosts follow `<service>.dev.dcupl.com` since 2026-09-22; `cdn.dev.dcupl.com` counts as a dcupl CDN only with `@dcupl/loader` from dcupl/dcupl#264 onwards — older SDKs need `dev-cdn.dcupl.com`. A dev project needs one of these set or the load 404s. `LOADER_CONFIG_FETCH_FAILED` now names the attempted URL (`--json`: `details.url` / `details.source`, api key redacted) — read it before guessing at credentials. The same resolution applies to `app loaders add` and `validate`.
 
+## Or no daemon: a deployed application's MCP tools
+
+A deployed dcupl application can serve its data as read-only MCP tools (`models`, `guide`, `query`, `aggregate`, `facet`, `pivot`, `metadata`, `suggest`, plus `endpoint_*` per scripted endpoint). If they are in your tool list and the question is about that application's data, use them instead of a daemon: the instance is already running, there are no files to load, and the workspace and CLI-version checks above don't apply. Start a daemon when the data is in local files, when you need to change models or data, or when no dcupl MCP server is connected. Arguments, the tool ↔ CLI mapping and the paging cap (`count` ≤ 1000): `references/querying.md` → "Querying via MCP".
+
 ## Routing
 
 | Task | Read |
 |---|---|
 | Querying / analyzing tabular data with the `dcupl app` daemon (facets, aggregations, group-bys, filters, counts) | `references/querying.md` |
+| Querying a deployed dcupl application through its MCP tools (`models`, `guide`, `query`, `facet`, `pivot`, …) | `references/querying.md` → "Querying via MCP" (that section and the operator table are enough; skip the daemon sections) |
 | Cloud sync — `dcupl files` status/push/pull, per-file ops, version management | `references/cloud-sync.md` |
 | Generating a model from a data file (`dcupl generate model --from`) | `references/model-authoring.md` |
 | Adding quality rules / validators to a model (ask the user how restrictive first) | `references/model-authoring.md` → "Quality rules & validators" |
