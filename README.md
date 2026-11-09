@@ -94,15 +94,28 @@ node --test                                    # the guard's unit tests and the 
 ```
 
 The guard exits 0 when the table matches, 1 when it differs or is malformed and
-2 when it could not check (unreadable schema, unknown flag). A match is one row
-per operator, in schema order, with the schema's wording; between the markers
-there is the table only. `--write` never deletes the row of an operator the
-schema does not list.
+2 when it could not check (unreadable schema, unreadable skill file, unknown
+flag). Its output names the commit of `dcupl` it read (`… at origin/main (commit
+c389f377 of 2026-11-05)`): an old commit there means the `git fetch` was skipped.
+
+A match is one row per operator, in schema order, with the schema's wording and
+three cells; the Example cell is empty or a `code` example, and a JSON example
+names the row's operator. Every pair of markers in the file is checked. Between
+the markers there is the table only, and a table row sits between them, not
+right before or after. A `|` inside a cell is written `\|`, also inside `code`.
+
+`--write` replaces the Semantics cell of a row that differs and leaves every
+other byte of the row as written (the example with its `\|`, the padding); a row
+that matches is not touched. It adds missing rows, restores the order, drops
+duplicates and never deletes the row of an operator the schema does not list.
 
 `node --test` also runs `scripts/skill-frontmatter.test.mjs`: every `SKILL.md`
 in the repo keeps its `name` within 64 and its `description` within 1024
 characters, the limits of the skill format (`claude plugin validate` does not
-check them). Run it after every change to a skill's frontmatter.
+check them). The value is measured as a YAML parser reads it: plain or quoted,
+on one line or wrapped onto further lines, or a block scalar (`>`, `|`). A value
+the test cannot measure as a whole (a `: ` in an unquoted value, a list, a
+nested map) fails it. Run it after every change to a skill's frontmatter.
 
 It needs Node 20+ and no install or network: the schema is read with `git show`
 from the `dcupl` checkout (`--dcupl-repo <dir>` / `DCUPL_REPO`, `--ref` /
