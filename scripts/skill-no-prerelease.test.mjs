@@ -14,8 +14,8 @@ const SKILLS_DIR = join(REPO_ROOT, 'dcupl', 'skills');
 
 /** What counts as a prerelease reference, with the reason a hit is reported under. */
 export const PRERELEASE_PATTERNS = [
-  // 1.4.0-beta.17, 2.0.0-rc.1, 3.1.0-next.2, 1.0.0-alpha
-  { reason: 'prerelease version', pattern: /\b\d+\.\d+\.\d+-(?:alpha|beta|rc|next|canary|dev|pre)(?:\.\d+)?\b/i },
+  // 1.4.0-beta.17, 2.0.0-rc.1, 3.1.0-next.2, 1.0.0-alpha, and tags with a leading v (v3.0.0-dev)
+  { reason: 'prerelease version', pattern: /\bv?\d+\.\d+\.\d+-(?:alpha|beta|rc|next|canary|dev|pre)(?:\.\d+)?\b/i },
   // "beta.17" on its own, e.g. "up to beta.16"
   { reason: 'prerelease number', pattern: /\b(?:alpha|beta|rc)\.\d+\b/i },
   // "earlier betas", "on a beta", "the beta channel": the word is only ever a version here, so
@@ -47,6 +47,9 @@ test('finds the prerelease forms the rule names', () => {
   const hits = (line) => findPrereleaseReferences(line).map(({ match }) => match);
   assert.deepEqual(hits('since CLI 1.4.0-beta.17 the flag exists'), ['1.4.0-beta.17', 'beta.17', 'beta']);
   assert.deepEqual(hits('`@dcupl/*` 2.0.0-rc.1'), ['2.0.0-rc.1', 'rc.1']);
+  // a git tag or runner version with a leading v
+  assert.deepEqual(hits('runner v3.1.0-next.2 and v1.4.0-canary.3'), ['v3.1.0-next.2']);
+  assert.deepEqual(hits('pinned to v3.0.0-dev'), ['v3.0.0-dev']);
   assert.deepEqual(hits('On CLI betas up to beta.16 it crashed'), ['beta.16', 'betas']);
   assert.deepEqual(hits('earlier betas wrote it elsewhere'), ['betas']);
   assert.deepEqual(hits('a workspace that still runs a beta'), ['beta']);

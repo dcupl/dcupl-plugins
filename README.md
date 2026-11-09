@@ -90,7 +90,7 @@ change to the skill and whenever that schema changes:
 git -C ../dcupl fetch origin                   # the guard reads origin/main of the checkout next to this repo
 node scripts/check-operator-table.mjs          # exit 1 and one line per difference when the table drifted
 node scripts/check-operator-table.mjs --write  # copy the schema wording into the table, examples kept
-node --test                                    # the guard's unit tests and the frontmatter limits
+node --test                                    # the guard's unit tests, the frontmatter limits, no prerelease references
 ```
 
 The guard exits 0 when the table matches, 1 when it differs or is malformed and
@@ -116,6 +116,12 @@ check them). The value is measured as a YAML parser reads it: plain or quoted,
 on one line or wrapped onto further lines, or a block scalar (`>`, `|`). A value
 the test cannot measure as a whole (a `: ` in an unquoted value, a list, a
 nested map) fails it. Run it after every change to a skill's frontmatter.
+
+`node --test` also runs `scripts/skill-no-prerelease.test.mjs`: the skills
+describe the stable releases on npm `latest`, so no file under `dcupl/skills/`
+names a prerelease version, the betas as a channel or an npm prerelease tag; it
+lists every hit as `file:line`. A difference between two stable releases may
+still be named (SDK 1.x vs 2.x).
 
 It needs Node 20+ and no install or network: the schema is read with `git show`
 from the `dcupl` checkout (`--dcupl-repo <dir>` / `DCUPL_REPO`, `--ref` /

@@ -237,7 +237,7 @@ dcupl app fn groupBy --model Order --attribute customer \
 
 Each group entry comes back with an `_aggregates` array containing the requested computations. Vastly more efficient than looping `fn aggregate --query` per group.
 
-`fn groupBy` also orders and paginates its groups: `--sort key|size|<attribute>_<type>[:ASC|DESC]` orders the **groups** — by group key, by size, or by a requested `--aggregate` (e.g. `--aggregate price:avg --sort price_avg:DESC`) — and `--limit N` / `--start N` (0-based offset) apply after sorting. Use these for a top-N of groups instead of pulling every group and trimming client-side. A plain model attribute (`--sort price:DESC`) sorts the **items**; the groups only follow their first item (on CLI 1.4.0 `price:DESC` lists them by their highest price), so rank groups with `key`, `size` or `<attribute>_<type>`. An unknown sort key or direction, or mixing both kinds in one `--sort`, fails with `PARSE_ERROR` naming the accepted keys.
+`fn groupBy` also orders and paginates its groups: `--sort key|size|<attribute>_<type>[:ASC|DESC]` orders the **groups** — by group key, by size, or by a requested `--aggregate` (e.g. `--aggregate price:avg --sort price_avg:DESC`) — and `--limit N` / `--start N` (0-based offset) apply after sorting. Use these for a top-N of groups instead of pulling every group and trimming client-side. A plain model attribute (`--sort price:DESC`) sorts the **items**; the groups only follow their first item (`price:DESC` lists them by their highest price), so rank groups with `key`, `size` or `<attribute>_<type>`. An unknown sort key or direction, or mixing both kinds in one `--sort`, fails with `PARSE_ERROR` naming the accepted keys.
 
 ## `fn aggregate` flags
 

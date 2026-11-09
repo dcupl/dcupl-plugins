@@ -15,9 +15,9 @@ Before anything else, determine whether the current directory is a dcupl workspa
 - **Not in a workspace** — don't start authoring loosely. Ask the user whether there's a related workspace or dcupl console project elsewhere, and guide them through a proper setup (`dcupl init`, or bootstrap from an existing console project) before adding data.
 - **Version it in git.** A dcupl workspace is source — models, loader config, workflows, and data all benefit from history. If the workspace isn't a git repo (`git rev-parse --is-inside-work-tree` fails), suggest `git init` before you start changing things, so the user can review and roll back. See "Wrapping up every turn" for committing as you go.
 
-## Then: confirm the CLI version is 1.4.0 or newer
+## Then: confirm the CLI version is 1.4.1 or newer
 
-This skill is written against the stable **`@dcupl/cli` 1.4.1** (`@dcupl/*` 2.1.0). Every recipe here needs CLI 1.4.0 or newer — `files push --concurrency`, the text-only allowlist, and the large-file upload session in `references/cloud-sync.md` among them. A workspace often pins an older `@dcupl/cli` in `node_modules` that lags the user's global `dcupl`, and older CLIs lack newer subcommands/flags (and some pre-1.3.4 versions silently exit 0 on an unknown subcommand rather than erroring — success-looking no-ops). So check what you're actually running before relying on any recipe here:
+This skill is written against the stable **`@dcupl/cli` 1.4.1** (`@dcupl/*` 2.1.0). Every recipe here needs CLI 1.4.1 or newer — `files push --concurrency`, the text-only allowlist, and the large-file upload session in `references/cloud-sync.md` among them, and the type inference in `references/querying.md` and `references/model-authoring.md` is the one of the `@dcupl/*` 2.1.0 that 1.4.1 bundles (1.4.0 bundles 2.0.0, which reads `"06112"` as `6112`). A workspace often pins an older `@dcupl/cli` in `node_modules` that lags the user's global `dcupl`, and older CLIs lack newer subcommands/flags (and some pre-1.3.4 versions silently exit 0 on an unknown subcommand rather than erroring — success-looking no-ops). So check what you're actually running before relying on any recipe here:
 
 ```bash
 dcupl --version          # what's on PATH (typically the global install)
@@ -26,7 +26,7 @@ npx dcupl --version      # what the project's node_modules resolves
 
 - **Both current** → either works. Prefer bare `dcupl` to keep commands short.
 - **Only the global is current** → use bare `dcupl`, NOT `npx dcupl`. The repo's `package.json` scripts (e.g. `npm run serve`) still hit the older local CLI — fine for `dcupl serve`, not for `dcupl app`.
-- **Both old** → tell the user; recommend `npm i -g @dcupl/cli@latest` (or upgrading the workspace dependency) and confirm `dcupl --version` prints 1.4.0 or newer afterwards. Don't try to work around it.
+- **Both old** → tell the user; recommend `npm i -g @dcupl/cli@latest` (or upgrading the workspace dependency) and confirm `dcupl --version` prints 1.4.1 or newer afterwards. Don't try to work around it.
 
 Unknown flags and subcommands on a current CLI fail loudly — `dcupl app query execute --queries …` returns `{"code":"UNKNOWN_OPTION", …}`, usually with a "Did you mean --query?" hint — so a mistyped flag errors rather than silently returning unfiltered data. If a command instead does nothing and exits 0, suspect an old CLI and re-check the version.
 
