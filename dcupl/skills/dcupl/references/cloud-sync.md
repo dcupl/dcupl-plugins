@@ -4,7 +4,7 @@ All cloud-sync verbs live under the `files` namespace. The three core sync comma
 
 > **TL;DR:** `dcupl files status` to preview, `dcupl files push` / `pull` to sync. Per-file ops (`read`/`write`/`copy`/`move`/`delete`/`list`) and version management (`files versions`) below. Runs inside a workspace only — needs `dcupl.config.json` + `dcupl.secrets.json` (create them with `dcupl config set`, see [Configuring credentials](#configuring-credentials)).
 
-> **Heads up on the legacy commands.** `dcupl files:push` / `files:pull` / `files:copy` / `files:versions` (colon-style) still work but are **deprecated** and print a warning. Prefer the new space-separated form below. Do **not** reach for the legacy pair to move binary files: the dcupl CDN stores text only, the legacy zip path is extension-filtered server-side, and binary was never actually supported there either. See **What can be synced** under *Incremental sync* below. (On CLI 1.4.0-beta.3 the deprecation warning printed by `files:push` / `files:pull` still says binary uploads are "not yet supported by the new command" — that message is stale; there is no binary path on either command.)
+> **Heads up on the legacy commands.** `dcupl files:push` / `files:pull` / `files:copy` / `files:versions` (colon-style) still work but are **deprecated** and print a warning. Prefer the new space-separated form below. Do **not** reach for the legacy pair to move binary files: the dcupl CDN stores text only, the legacy zip path is extension-filtered server-side, and binary was never actually supported there either. See **What can be synced** under *Incremental sync* below.
 
 ## Configuring credentials
 
@@ -22,7 +22,7 @@ Cloud-sync commands need three pieces of config split across two files at the pr
 
 - **`projectId`** (required) — the dcupl console project the workspace syncs against.
 - **`consoleApiUrl`** (optional) — overrides the console API base URL. Defaults to the production endpoint when omitted; set it explicitly only for self-hosted or `localhost` instances (primarily a dcupl-internal-dev concern). Not scaffolded by default — discover it via `dcupl config set --help`, the interactive `dcupl config set` prompt, or `dcupl schemas get DcuplCliConfig --example`.
-- **`cdnBaseUrl`** (optional, CLI 1.4.0-beta.4+) — CDN host used by `dcupl app create --load --source remote`, `app loaders add` and `validate --source remote`. Precedence: `--cdn-base-url` flag > `DCUPL_CDN_BASE_URL` env > this key > a known-host mapping from `consoleApiUrl` (`api.dcupl.com` → `cdn.dcupl.com`, `api.dev.dcupl.com` → `cdn.dev.dcupl.com`; old `dev.api` → `dev-cdn` kept) > the SDK's prod default. Only needed for self-hosted / unusual hosts; the dev console maps automatically once `consoleApiUrl` is `https://api.dev.dcupl.com` (or the old `https://dev.api.dcupl.com`). `dcupl config set` has no prompt or flag for it — edit `dcupl.config.json` or use the env/flag. A non-dcupl host prints a warning because the SDK then sends no api key and no cache-buster.
+- **`cdnBaseUrl`** (optional) — CDN host used by `dcupl app create --load --source remote`, `app loaders add` and `validate --source remote`. Precedence: `--cdn-base-url` flag > `DCUPL_CDN_BASE_URL` env > this key > a known-host mapping from `consoleApiUrl` (`api.dcupl.com` → `cdn.dcupl.com`, `api.dev.dcupl.com` → `cdn.dev.dcupl.com`; old `dev.api` → `dev-cdn` kept) > the SDK's prod default. Only needed for self-hosted / unusual hosts; the dev console maps automatically once `consoleApiUrl` is `https://api.dev.dcupl.com` (or the old `https://dev.api.dcupl.com`). `dcupl config set` has no prompt or flag for it — edit `dcupl.config.json` or use the env/flag. A non-dcupl host prints a warning because the SDK then sends no api key and no cache-buster.
 - **`loaderPath`**, **`baseFolder`**, plus optional `modelsBasePath`, `dataBasePath`, `filesUpload.{include,exclude}` — paths the CLI walks for uploads.
 
 **`dcupl.secrets.json`** — API key only, **add to `.gitignore`**:
@@ -131,7 +131,7 @@ dcupl files push --concurrency 2         # fewer parallel transfers (slow link /
 - `--concurrency <n>` — max parallel file transfers on `push`/`pull` (default 4). Lower it for very large files or slow links. Not validated: a value below 1 or non-numeric is silently ignored and the default 4 applies — pass `--concurrency 1` explicitly to serialise transfers.
 - `--json` — JSON output (default is human-readable).
 
-**Guardrails.** `push` rejects `--version production` — publish there via `files versions copy` instead. `push` also rejects `--name` (CLI ≥ 1.4.0-beta.19, `PUSH_NAME_NOT_SUPPORTED` in `--json`): named versions are created in the console, not from the CLI (dcupl/dcupl-cli#306). `pull` refuses to switch to a different version when the workspace is dirty unless you pass `--force`.
+**Guardrails.** `push` rejects `--version production` — publish there via `files versions copy` instead. `push` also rejects `--name` (`PUSH_NAME_NOT_SUPPORTED` in `--json`): named versions are created in the console, not from the CLI (dcupl/dcupl-cli#306). `pull` refuses to switch to a different version when the workspace is dirty unless you pass `--force`.
 
 **What can be synced.** The dcupl CDN stores **text files only**, enforced client-side before any request is sent:
 
