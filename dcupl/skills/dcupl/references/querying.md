@@ -80,7 +80,7 @@ Then summarize what you found and surface 1-2 notable patterns. Skip this for na
 - `MODEL_NOT_FOUND` doesn't mean "create the model"; the user might have typo'd a name. Run `app models keys --json` and confirm.
 - `MULTIPLE_APPS` means there's >1 daemon running. Run `app list --json`, ask the user which they meant, or infer from `cwd` if you can.
 - `NETWORK` (daemon unreachable) means the registry still lists a daemon whose process is gone (crashed, or killed out-of-band). Crashed entries are kept on purpose so you can inspect them: `app list --json` marks them `status: "crashed"`, `app status --app <id> --json` returns `status: "crashed"` plus `logPath` and a `logTail`, and `app logs --app <id> [--lines N]` prints the daemon's log. Clean up with `app destroy --app <id>` (it tolerates the unreachable daemon and removes the registry entry), then `app create` again.
-- `UNKNOWN_OPTION` / `PARSE_ERROR` / `PROJECTION_INVALID_SHAPE` are your fault — a mistyped flag, a missing argument, or a malformed `--projection`. `UNKNOWN_OPTION` usually carries a "Did you mean …?" hint; re-read the command's option requirements (`--help`).
+- `UNKNOWN_OPTION` / `PARSE_ERROR` / `PROJECTION_INVALID_SHAPE` are your fault — a mistyped flag, a missing argument, or a malformed `--projection`. A `--query` that isn't JSON or isn't a condition/group shape (e.g. `filters` instead of `queries`) is a `PARSE_ERROR` with the expected shape, and so is an operator that is neither built-in nor a registered custom operator (e.g. `contains`) — the message and `details.validOperators` list the valid ones. A group with `queries` and `operator: "or"` instead of `groupType: "or"` is not caught and runs as AND (often `[]`), so always write `groupType`. `UNKNOWN_OPTION` usually carries a "Did you mean …?" hint; re-read the command's option requirements (`--help`).
 - `TYPE_MISMATCH` (only from `fn aggregate`): the user asked for `avg`/`sum` on a non-numeric column. The error message names the column and its current type — fix is `models set` with the right type, then `data set` (full replace) to re-type existing rows.
 
 **7. Suggest follow-ups.** After answering an analytical question, offer 1-2 natural next steps. This helps users discover what dcupl can do and surfaces follow-on insights they hadn't considered.
@@ -122,10 +122,8 @@ dcupl app create --auto-update --json
 #    inferring schema for *this* call — more reliable than the row-1-only default of
 #    --auto-generate-properties. --key-property tells dcupl which column is the unique id
 #    (no id column? pass --auto-generate-key instead and dcupl assigns one per record;
-#    comma-separate for a composite key: --key-property id,lang → key "id::lang", CLI 1.4.0-beta.18 —
-#    earlier betas read "id,lang" as one column name and collapsed every row into one item).
-#    Semicolon-, tab- or pipe-separated CSVs are detected (CLI 1.4.0-beta.18; earlier betas
-#    read such a file as one column).
+#    comma-separate for a composite key: --key-property id,lang → key "id::lang").
+#    Semicolon-, tab- or pipe-separated CSVs are detected.
 dcupl app data upsert --file /path/to/products.csv --model Product --key-property id \
   --auto-generate-sample-size 100 --json
 # → {"upserted":3,"model":"Product","built":true}
@@ -154,7 +152,7 @@ When the data is small or already in the agent's context, skip the temp-file dan
 
 ```bash
 # Inline JSON
-dcupl app data upsert --content '[{"id":"1","name":"Alpha"},{"id":"2","name":"Beta"}]' \
+dcupl app data upsert --content '[{"id":"1","name":"Apple"},{"id":"2","name":"Banana"}]' \
   --model Item --key-property id --json
 
 # Inline model definition
@@ -197,7 +195,7 @@ The `data` namespace has more verbs than `upsert`. Reach for these instead of de
 | Verb | Use |
 |---|---|
 | `app data upsert` | Insert or update records (most common). |
-| `app data update` | Update existing records by key — rows whose key matches no record (built, or staged by `set`/`upsert`) are skipped, never inserted; use `upsert` to add them. From CLI 1.4.0-beta.17 the reply is `{ updated, skipped, skippedKeys (≤ 20), model, built }` (dcupl/dcupl-cli#288; earlier betas answered `added: <row count>` even for skipped rows). Pass `--key-property` when the model was inferred by an upsert and is not built yet, otherwise every row reads as skipped. |
+| `app data update` | Update existing records by key — rows whose key matches no record (built, or staged by `set`/`upsert`) are skipped, never inserted; use `upsert` to add them. The reply is `{ updated, skipped, skippedKeys (≤ 20), model, built }` (dcupl/dcupl-cli#288). Pass `--key-property` when the model was inferred by an upsert and is not built yet, otherwise every row reads as skipped. |
 | `app data set` | Full replace — drops existing records for the model, ingests the new set. Re-types columns based on the current model. |
 | `app data remove --model M --content '["k1","k2"]'` | Remove specific records by key (also takes `--file`). |
 | `app data reset --model M` | Drop all records for one model; keeps the model definition. |
@@ -222,7 +220,7 @@ dcupl app loaders remove --loader catalog               # detach
 
 `loaders process` is the verb to use when the user says "reload from console with a different env" mid-session — much cheaper than destroying the daemon.
 
-**One model key per app loader** (SDK 2.0.0-beta.34, dcupl/dcupl#424): a second loader whose config loads model files, view files or data for a key another loader of the same daemon already loads makes `loaders process` fail with `LOADER_SHARED_MODEL_KEY` and the SDK's `SharedModelKeyError` message naming the key and both loaders (CLI 1.4.0-beta.18, dcupl/dcupl-cli#295; earlier betas report the generic `LOADER_PROCESS_FAILED`) and changes nothing. Split models across loaders by key, not by file. `loaders remove` marks the app dirty (and builds right away with `--auto-update`; the command warns about pending changes like the data commands — CLI 1.4.0-beta.18, dcupl/dcupl-cli#295; earlier betas detached the loader without marking anything, so queries kept serving its models and data) and drops what that loader loaded (its models, views and rows) on the next build; a model defined in code keeps its definition. Re-processing a loader (`loaders process` again) drops the resources that left its config and rebuilds the ones it loads from their current files — removed attributes disappear, changed types apply — and existing lists follow (dcupl/dcupl#414, #419).
+**One model key per app loader** (SDK 2.x, dcupl/dcupl#424): a second loader whose config loads model files, view files or data for a key another loader of the same daemon already loads makes `loaders process` fail with `LOADER_SHARED_MODEL_KEY` and the SDK's `SharedModelKeyError` message naming the key and both loaders (dcupl/dcupl-cli#295) and changes nothing. Split models across loaders by key, not by file. `loaders remove` marks the app dirty (and builds right away with `--auto-update`; the command warns about pending changes like the data commands, dcupl/dcupl-cli#295) and drops what that loader loaded (its models, views and rows) on the next build; a model defined in code keeps its definition. Re-processing a loader (`loaders process` again) drops the resources that left its config and rebuilds the ones it loads from their current files — removed attributes disappear, changed types apply — and existing lists follow (dcupl/dcupl#414, #419).
 
 ## `fn groupBy --aggregate` for one-shot group-by-aggregate
 
@@ -239,7 +237,7 @@ dcupl app fn groupBy --model Order --attribute customer \
 
 Each group entry comes back with an `_aggregates` array containing the requested computations. Vastly more efficient than looping `fn aggregate --query` per group.
 
-`fn groupBy` also orders and paginates its groups: `--sort <attr>:ASC|DESC` (e.g. `--sort price:DESC`), `--limit N` and `--start N` (0-based offset). Use these for a top-N of groups instead of pulling every group and trimming client-side.
+`fn groupBy` also orders and paginates its groups: `--sort key|size|<attribute>_<type>[:ASC|DESC]` orders the **groups** — by group key, by size, or by a requested `--aggregate` (e.g. `--aggregate price:avg --sort price_avg:DESC`) — and `--limit N` / `--start N` (0-based offset) apply after sorting. Use these for a top-N of groups instead of pulling every group and trimming client-side. A plain model attribute (`--sort price:DESC`) sorts the **items**; the groups only follow their first item (`price:DESC` lists them by their highest price), so rank groups with `key`, `size` or `<attribute>_<type>`. An unknown sort key or direction, or mixing both kinds in one `--sort`, fails with `PARSE_ERROR` naming the accepted keys.
 
 ## `fn aggregate` flags
 
@@ -281,7 +279,7 @@ dcupl app fn facets --model Order --attribute customerId --include-results --jso
 
 ## The numeric-types gotcha — when `avg`/`sum` returns nothing
 
-CSV files don't carry type information, so `parseCsv` produces strings for every field. With **row-1-only** inference (`--auto-generate-properties` and no sampling), dcupl types columns from that single row — typically `string`. **Numeric aggregations (`avg`, `sum`) only work on `int`/`float` columns.** (Multi-row sampling fixes this for CSV too — see the table below.) With string-typed columns:
+CSV files don't carry type information, so `parseCsv` produces strings for every field. With **row-1-only** inference (`--auto-generate-properties` and no sampling), row 1 picks each column's type: a numeric first cell gives `int`/`float` (a decimal in a later row makes the column `float`), but an empty first cell, or a zero-padded value (`"06112"`) in any row, gives `string` (dcupl/dcupl#503). **Numeric aggregations (`avg`, `sum`) only work on `int`/`float` columns.** (Multi-row sampling also types a column whose first cell is empty — see the table below.) With string-typed columns:
 
 - `min`, `max` — work, but lexicographic (`"100"` < `"99"`)
 - `avg`, `sum` — return undefined or 0
@@ -302,12 +300,12 @@ What you can expect:
 | Input shape | Result |
 |---|---|
 | **JSON/NDJSON, all rows numeric** (`{"price": 99.99}`) | Inferred as `float`. Works without flags too. |
-| **JSON/NDJSON, mixed empty/numeric** (`{"price": ""}` then `{"price": 99.99}`) | Inferred as `any` — SDK widens on mixed types rather than narrowing. `TYPE_MISMATCH` on `avg`/`sum`. |
+| **JSON/NDJSON, mixed empty/numeric** (`{"price": ""}` then `{"price": 99.99}`) | `float` with sampling — the empty value doesn't widen it. Row-1-only inference takes `string` from the `""`, so `TYPE_MISMATCH` on `avg`/`sum`. |
 | **CSV, clean numeric column, WITH multi-row sampling** (`--auto-generate-sample-size N` / `--auto-generate-deep`) | Inferred as `int`/`float` — `avg`/`sum`/`min`/`max` work with **NO explicit model** (`price` → `float`, `inStock` → `int`). |
-| **CSV, default (row-1-only inference)** | Typically `string` — no sampling, so the SDK only sees row 1's stringified cell. |
-| **CSV, mixed/sparse column** | Widened to `any` even with sampling — `TYPE_MISMATCH` on `avg`/`sum`; declare an explicit model. |
+| **CSV, default (row-1-only inference)** | Row 1 picks the type: a numeric first cell gives `int`/`float` (a later decimal makes it `float`); an empty first cell, or a zero-padded value in any row, gives `string`. |
+| **CSV, mixed column** (text and numbers) | Widened to `any` even with sampling — `TYPE_MISMATCH` on `avg`/`sum`; declare an explicit model. Empty cells alone don't widen a numeric column. |
 
-**Bottom line (corrected):** multi-row sampling (`--auto-generate-sample-size N` / `--auto-generate-deep`) **does** infer numeric types from **CSV** too, so `avg`/`sum` often work without an explicit model — the older "CSV is always string" guidance no longer holds. Still declare an explicit model when you need deterministic types regardless of sampling, or when a column is mixed/sparse enough that inference widens it to `any`.
+**Bottom line (corrected):** multi-row sampling (`--auto-generate-sample-size N` / `--auto-generate-deep`) **does** infer numeric types from **CSV** too, so `avg`/`sum` often work without an explicit model — the older "CSV is always string" guidance no longer holds. Still declare an explicit model when you need deterministic types regardless of sampling, or when a column mixes text and numbers so inference widens it to `any`.
 
 The CLI catches the failure mode preflight: if you call `fn aggregate --types avg,sum` on a `string` or `any` column, it returns `code: 'TYPE_MISMATCH'` with a clear hint pointing at the explicit-model fix. So you'll get a fast, obvious failure rather than a silently-missing field.
 
@@ -368,20 +366,20 @@ The daemon wraps this into a full query group automatically.
 | `size` | array (or string) length equals value, a number. | `{"operator":"size","attribute":"tags","value":3}` |
 <!-- operator-semantics:end -->
 
-`gt`/`gte`/`lt`/`lte` compare with JS `<`/`>`: a column typed `string` compares lexically (`"9"` > `"100"`), so type it `int`/`float` first (see "numeric-types gotcha" above). A `date` attribute compares with epoch milliseconds; an ISO string matches nothing. `in` needs SDK ≥ 2.0.0-beta.21.
+`gt`/`gte`/`lt`/`lte` compare with JS `<`/`>`: a column typed `string` compares lexically (`"9"` > `"100"`), so type it `int`/`float` first (see "numeric-types gotcha" above). A `date` attribute compares with epoch milliseconds; an ISO string matches nothing. `in` needs SDK 2.x.
 
-**Any-of:** `eq` with an array value compares the *whole* array, so `{"operator":"eq","attribute":"status","value":["a","b"]}` matches nothing on a string column. Use `in` (SDK ≥ 2.0.0-beta.21), or on older SDKs an `or` group with one `eq` per value. `in` uses `eq`'s equality, `"options":{"invert":true}` makes it NOT IN, and an empty list matches nothing.
+**Any-of:** `eq` with an array value compares the *whole* array, so `{"operator":"eq","attribute":"status","value":["a","b"]}` matches nothing on a string column. Use `in` (SDK 2.x), or on SDK 1.x an `or` group with one `eq` per value. `in` uses `eq`'s equality, `"options":{"invert":true}` makes it NOT IN, and an empty list matches nothing.
 
-**Every condition takes `options`:** `invert` (NOT — on SDK ≥ 2.0.0-beta.21 it applies to every operator; older SDKs ignored it for `gt`/`lt`/`size`/`isTruthy`), `transform` (`["lowercase","trim","removeWhitespace"]`, applied to both sides) and `arrayValueHandling` (`"some"` default / `"every"`) for array values. On SDK ≥ 2.0.0-beta.21 array values include dotted paths through a multi-valued reference (`memberships.role` compares every membership's role) and answer correctly on a cold daemon; `every` needs at least one value.
+**Every condition takes `options`:** `invert` (NOT — on SDK 2.x it applies to every operator; SDK 1.x ignored it for `gt`/`lt`/`size`/`isTruthy`), `transform` (`["lowercase","trim","removeWhitespace"]`, applied to both sides) and `arrayValueHandling` (`"some"` default / `"every"`) for array values. On SDK 2.x array values include dotted paths through a multi-valued reference (`memberships.role` compares every membership's role) and answer correctly on a cold daemon; `every` needs at least one value.
 
-**Which SDK does the daemon run?** The daemon bundles its own `@dcupl/core`; check `dcupl --version` / the CLI's `package.json`. As of 2026-09-29 the CLI bundles 2.0.0-beta.20, so `in`, `regexFlags` and the array-value fixes above need a CLI release that bundles beta.21.
+**Which SDK does the daemon run?** The daemon bundles its own `@dcupl/core`; check `dcupl --version` / the CLI's `package.json`. CLI 1.4.1 bundles `@dcupl/core` 2.1.0 (CLI 1.4.0 bundles 2.0.0), so every daemon from CLI 1.4.0 on has `in`, `regexFlags` and the array-value behaviour above.
 
 **Filter for null/empty values:** `{"operator":"isTruthy","attribute":"x","value":false}` matches `null`, `undefined`, empty string, and `0` (anything JS-falsy). There is no dedicated `isNull`/`isEmpty` operator — `isTruthy:false` is the canonical pattern.
 
 **`find` has two modes** depending on the `value` shape:
 
 - **Bare string** (e.g. `"Sneaker"`) — **exact-equality** match against the *whole* field value, NOT a substring. `find` with `"Ball"` does **not** match `"Soccer Ball"` — it returns `[]`. The characters `^`, `$`, `.`, etc. are not metacharacters here. **For substring matching, you must use a slash-delimited regex.**
-- **Slash-delimited regex** (e.g. `"/^Sneaker/"`) — the text between the slashes is a JS regex. Anchors and substring patterns work as you'd expect. **Flags are not read from the value:** `"/foo/i"` is a bare string (exact match). For case-insensitive matching use `"options":{"regexFlags":"i"}` (SDK ≥ 2.0.0-beta.21), e.g. `{"operator":"find","attribute":"name","value":"/sneaker/","options":{"regexFlags":"i"}}`; on older SDKs use `"options":{"transform":["lowercase"]}` with a lower-cased pattern.
+- **Slash-delimited regex** (e.g. `"/^Sneaker/"`) — the text between the slashes is a JS regex. Anchors and substring patterns work as you'd expect. **Flags are not read from the value:** `"/foo/i"` is a bare string (exact match). For case-insensitive matching use `"options":{"regexFlags":"i"}` (SDK 2.x), e.g. `{"operator":"find","attribute":"name","value":"/sneaker/","options":{"regexFlags":"i"}}`; on SDK 1.x use `"options":{"transform":["lowercase"]}` with a lower-cased pattern.
 
 This means `value: "M"` only matches a field whose entire value is exactly `M`, `value: "/^M/"` matches any field *starting with* `M`, and `value: "/Ball/"` matches any field *containing* `Ball` (e.g. `Soccer Ball`, `Rugby Ball`). If a `find` returns zero unexpectedly, the usual cause is using a bare string where you needed a `/regex/` for substring/pattern matching.
 
@@ -411,7 +409,7 @@ For most exploratory work, a single condition via `--query` is enough. Use `--qu
 
 `query execute` accepts:
 
-- `--sort price:DESC,name:ASC` — comma-separated `attr:DIR` pairs (DIR is `ASC` or `DESC`, default `ASC`)
+- `--sort price:DESC,name:ASC` — comma-separated `attr:DIR` pairs (DIR is `ASC` or `DESC`, default `ASC`; any other direction is a `PARSE_ERROR`)
 - `--limit 10` and `--start 20` — pagination. `--start` is a **0-based offset**: records 100–110 of a sorted result = `--start 100 --limit 11`
 - `--projection` — pick which fields to return; three equivalent forms:
   - Object: `--projection '{"id":true,"name":true}'` (use `false` to exclude)
@@ -554,10 +552,10 @@ This is the manual/auto-update trade-off in practice: `--auto-update` is conveni
 - **`--auto-generate-*` lives on both `app create` and `app data <verb>`.** Per-call flag overrides the daemon default (use `--no-auto-generate-properties` to force off). Inference still only runs once per model — later mutations on a model that already has a schema never re-infer.
 - **Ingest into an unknown model is rejected up-front.** If you call `data {upsert,update,set}` on a model that isn't registered yet and isn't going to be auto-inferred, the daemon returns `MODEL_NOT_FOUND` with a hint suggesting `app models set` or one of the `--auto-generate-*` flags. Don't try to "force" the upsert through — fix the call.
 - **`--query` accepts a single condition, an array, or a full group.** The daemon normalizes any of them; for large AND/OR groups, use `--query-file` with a query-group JSON.
-- **`fn groupBy` returns group keys + sizes, not records inside each group.** If you want the records, follow up with `query execute --query` per group. To page or rank the groups themselves, use `--sort <attr>:DIR --limit N --start N`.
+- **`fn groupBy` returns group keys + sizes, not records inside each group.** If you want the records, follow up with `query execute --query` per group. To page or rank the groups themselves, use `--sort key|size|<attribute>_<type>:DIR --limit N --start N` (see `fn groupBy --aggregate` above).
 - **`--content` for small inline data, `--file` for anything substantial.** Inline payloads have shell-escaping pain at scale; over a few KB, write a temp file or use `--content -` to pipe.
 - **Drop `--json` for table output.** When you're exploring interactively in a terminal, omitting `--json` renders arrays-of-records as ASCII tables. Add `--json` back the moment you start piping into another tool.
-- **Reserved error codes:** `APP_NOT_FOUND`, `MULTIPLE_APPS`, `MODEL_NOT_FOUND`, `ATTRIBUTE_NOT_FOUND`, `MISSING_APP_ID`, `NOT_FOUND`, `UNAUTHORIZED`, `INVALID_RESPONSE`, `NETWORK`, `INTERNAL`, `TYPE_MISMATCH`, `BAD_INPUT`. `BAD_INPUT` is for semantically invalid input — mutually exclusive flags passed together (`--file` + `--content`, `--bins` + `--group-options`, `--spec` + `--rows`), a malformed `--aggregate`/`--values`/`--bins` spec, a `--query` that can't be normalized into a query group, or `fn aggregate` with nothing to compute. Argument-*parsing* failures have their own finer-grained codes: `UNKNOWN_OPTION` (unrecognized flag, often with a "Did you mean" hint), `PARSE_ERROR` (missing/malformed argument), and `PROJECTION_INVALID_SHAPE` (unparseable `--projection`). Programmatic callers should match on `code`, not `message`.
+- **Reserved error codes:** `APP_NOT_FOUND`, `MULTIPLE_APPS`, `MODEL_NOT_FOUND`, `ATTRIBUTE_NOT_FOUND`, `MISSING_APP_ID`, `NOT_FOUND`, `UNAUTHORIZED`, `INVALID_RESPONSE`, `NETWORK`, `INTERNAL`, `TYPE_MISMATCH`, `BAD_INPUT`. `BAD_INPUT` is for semantically invalid input — mutually exclusive flags passed together (`--file` + `--content`, `--bins` + `--group-options`, `--spec` + `--rows`), a malformed `--aggregate`/`--values`/`--bins` spec, or `fn aggregate` with nothing to compute. Argument-*parsing* failures have their own finer-grained codes: `UNKNOWN_OPTION` (unrecognized flag, often with a "Did you mean" hint), `PARSE_ERROR` (missing/malformed argument, also a malformed `--query` or `--sort`), and `PROJECTION_INVALID_SHAPE` (unparseable `--projection`). Programmatic callers should match on `code`, not `message`.
 
 ## CLI invocation — finding `dcupl`
 
