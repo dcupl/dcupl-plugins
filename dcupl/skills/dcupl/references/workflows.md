@@ -1,10 +1,10 @@
-# dcupl — Workflow v3 build / test / deploy
+# dcupl — Workflow build / test / deploy
 
 This reference covers the full loop: authoring a `TemplateV3` file, validating it locally and remotely, exercising it against a dev runner, and deploying to production.
 
 > **Schema first.** Before authoring any node, run `dcupl schemas get <NodeTypeConfig>` to read the exact field names. The schema is the source of truth for `config` field names — do not guess from memory.
 
-> **Start from a real example, and distrust prose docs.** The fastest, least error-prone way to author a v3 workflow is to copy one already working *in this project*: `dcupl files list`, then `dcupl files read --path workflows/<existing>.workflow-v3.json`. That gives you exact node shapes, a valid `apiKey`, and templating that is known to run on the runner — far more reliable than building from scratch. `dcupl schemas get <X> [--example]` is authoritative for `config` field *names*, but it does NOT describe runtime behavior (how data flows between nodes, the script sandbox API, what a node emits) — for that, read "Authoring node logic" below. Prose docs elsewhere may be stale and contradict the live schema; when they disagree, trust the schema and this file.
+> **Start from a real example, and distrust prose docs.** The fastest, least error-prone way to author a workflow is to copy one already working *in this project*: `dcupl files list`, then `dcupl files read --path workflows/<existing>.workflow-v3.json`. That gives you exact node shapes, a valid `apiKey`, and templating that is known to run on the runner — far more reliable than building from scratch. `dcupl schemas get <X> [--example]` is authoritative for `config` field *names*, but it does NOT describe runtime behavior (how data flows between nodes, the script sandbox API, what a node emits) — for that, read "Authoring node logic" below. Prose docs elsewhere may be stale and contradict the live schema; when they disagree, trust the schema and this file.
 
 ## Authoring conventions — do these every time
 
