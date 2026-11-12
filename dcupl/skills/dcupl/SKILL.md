@@ -1,6 +1,6 @@
 ---
 name: dcupl
-description: Use for any dcupl ecosystem work — authoring data models, app loader configs (`dcupl.lc.json`), or workflow templates (v3); querying tabular data via the `dcupl app` daemon or a deployed application's MCP tools (facets, aggregations, filtered queries); writing dcupl scripts (custom operators, sort or `endpoint` scripts) or scripted endpoints on a REST API template (`api/*.api.json`); scaffolding via `dcupl init` / `dcupl generate`; credentials via `dcupl config set` / `config get`; or syncing files with the dcupl cloud via `dcupl files` (status/push/pull, `files versions`). Trigger on phrases like "write a model", "build a workflow", "configure a loader", "what fields does a ModelDefinition have", "how many X are there", "breakdown by Y", "push files to dcupl", "pull from dcupl", "what changed", "configure my dcupl credentials", "set up apiKey", "write a script", "custom operator", "add an endpoint", or when the user works with `*.dcupl.json`, `dcupl.lc.json`, `api/*.api.json`, or workflow templates.
+description: Use for any dcupl ecosystem work — authoring data models, app loader configs (`dcupl.lc.json`), or workflow templates; querying tabular data via the `dcupl app` daemon or a deployed application's MCP tools (facets, aggregations, filtered queries); writing dcupl scripts (custom operators, sort or `endpoint` scripts) or scripted endpoints on a REST API template (`api/*.api.json`); scaffolding via `dcupl init` / `dcupl generate`; credentials via `dcupl config set` / `config get`; or syncing files with the dcupl cloud via `dcupl files` (status/push/pull, `files versions`). Trigger on phrases like "write a model", "build a workflow", "configure a loader", "what fields does a ModelDefinition have", "how many X are there", "breakdown by Y", "push files to dcupl", "pull from dcupl", "what changed", "configure my dcupl credentials", "set up apiKey", "write a script", "custom operator", "add an endpoint", or when the user works with `*.dcupl.json`, `dcupl.lc.json`, `api/*.api.json`, or workflow templates.
 ---
 
 # dcupl
@@ -15,9 +15,9 @@ Before anything else, determine whether the current directory is a dcupl workspa
 - **Not in a workspace** — don't start authoring loosely. Ask the user whether there's a related workspace or dcupl console project elsewhere, and guide them through a proper setup (`dcupl init`, or bootstrap from an existing console project) before adding data.
 - **Version it in git.** A dcupl workspace is source — models, loader config, workflows, and data all benefit from history. If the workspace isn't a git repo (`git rev-parse --is-inside-work-tree` fails), suggest `git init` before you start changing things, so the user can review and roll back. See "Wrapping up every turn" for committing as you go.
 
-## Then: confirm the CLI version is 1.4.1 or newer
+## Then: confirm the CLI version is 2.0.0 or newer
 
-This skill is written against the stable **`@dcupl/cli` 1.4.1** (`@dcupl/*` 2.1.0). Every recipe here needs CLI 1.4.1 or newer — `files push --concurrency`, the text-only allowlist, and the large-file upload session in `references/cloud-sync.md` among them, and the type inference in `references/querying.md` and `references/model-authoring.md` is the one of the `@dcupl/*` 2.1.0 that 1.4.1 bundles (1.4.0 bundles 2.0.0, which reads `"06112"` as `6112`). A workspace often pins an older `@dcupl/cli` in `node_modules` that lags the user's global `dcupl`, and older CLIs lack newer subcommands/flags (and some pre-1.3.4 versions silently exit 0 on an unknown subcommand rather than erroring — success-looking no-ops). So check what you're actually running before relying on any recipe here:
+This skill is written against the stable **`@dcupl/cli` 2.0.0** (`@dcupl/*` 2.1.0). Every recipe here needs CLI 2.0.0 or newer — `files push --concurrency`, the text-only allowlist, and the large-file upload session in `references/cloud-sync.md` among them, and the type inference in `references/querying.md` and `references/model-authoring.md` is the one of the `@dcupl/*` 2.1.0 that CLI 2.0.0 bundles (older CLIs bundle an SDK that can read `"06112"` as `6112`). A workspace often pins an older `@dcupl/cli` in `node_modules` that lags the user's global `dcupl`, and older CLIs lack newer subcommands/flags (and some pre-1.3.4 versions silently exit 0 on an unknown subcommand rather than erroring — success-looking no-ops). So check what you're actually running before relying on any recipe here:
 
 ```bash
 dcupl --version          # what's on PATH (typically the global install)
@@ -26,7 +26,7 @@ npx dcupl --version      # what the project's node_modules resolves
 
 - **Both current** → either works. Prefer bare `dcupl` to keep commands short.
 - **Only the global is current** → use bare `dcupl`, NOT `npx dcupl`. The repo's `package.json` scripts (e.g. `npm run serve`) still hit the older local CLI — fine for `dcupl serve`, not for `dcupl app`.
-- **Both old** → tell the user; recommend `npm i -g @dcupl/cli@latest` (or upgrading the workspace dependency) and confirm `dcupl --version` prints 1.4.1 or newer afterwards. Don't try to work around it.
+- **Both old** → tell the user; recommend `npm i -g @dcupl/cli@latest` (or upgrading the workspace dependency) and confirm `dcupl --version` prints 2.0.0 or newer afterwards. Don't try to work around it.
 
 Unknown flags and subcommands on a current CLI fail loudly — `dcupl app query execute --queries …` returns `{"code":"UNKNOWN_OPTION", …}`, usually with a "Did you mean --query?" hint — so a mistyped flag errors rather than silently returning unfiltered data. If a command instead does nothing and exits 0, suspect an old CLI and re-check the version.
 
@@ -60,10 +60,10 @@ A deployed dcupl application can serve its data as read-only MCP tools (`models`
 | Cloud sync — `dcupl files` status/push/pull, per-file ops, version management | `references/cloud-sync.md` |
 | Generating a model from a data file (`dcupl generate model --from`) | `references/model-authoring.md` |
 | Adding quality rules / validators to a model (ask the user how restrictive first) | `references/model-authoring.md` → "Quality rules & validators" |
-| Building, testing, or deploying a Workflow v3 (`dcupl workflow validate/test/deploy/undeploy/runners`) | `references/workflows.md` |
+| Building, testing, or deploying a workflow (`dcupl workflow validate/test/deploy/undeploy/runners`) | `references/workflows.md` |
 | Reviewing / auditing a workflow file (`*.workflow-v3.json`) — esp. before flagging anything as a leaked secret | `references/workflows.md` — a `dcupl-files` node's `auth.apiKey` is normally a **reference** — `{{variables.x}}` or the api-key *document id* (20 alphanumeric chars), committed deliberately, not a secret. Don't flag those. A v4 **UUID** there is the key's secret *value*; mention it, since it works end to end. |
 | Writing or registering a dcupl script (`script` / `async_script` / `sort` / `operator` / `endpoint` modes, `type: script` resources), or declaring scripted endpoints on a REST API template (`api/*.api.json` → `endpoints[]`, the `instance/<key>/endpoints/<path>` route) | `references/scripts.md` |
-| Authoring a model, loader config, or workflow v3 | Stay here — see "Authoring playbook" below. |
+| Authoring a model, loader config, or workflow template | Stay here — see "Authoring playbook" below. |
 | Validating that a workspace's loader, models, and data load cleanly | Stay here — see "Validate a workspace" below. |
 | Project scaffolding (`init`, `generate`, `serve`) | Stay here — see "Project setup" below. |
 
@@ -107,7 +107,7 @@ If a question can be answered by "what fields does <schema> support?", run `dcup
 
 - **Model** — A data shape the user authors as `*.dcupl.json`. Defines properties, references between models, optional sample data, and quality rules. Schema: `ModelDefinition`.
 - **App Loader Configuration** — `dcupl.lc.json`. Tells the loader what models, data files, transformers, scripts, and operators belong to an app, plus environment-specific variables. Schema: `AppLoaderConfiguration`.
-- **Workflow v3** — Node-graph workflow definition with triggers, steps (request, script, data-mapper, dcupl-instance, …), responses, and edges connecting them. Schemas: `WorkflowConfigV3` (the graph) and `TemplateV3` (template wrapping the graph with metadata).
+- **Workflow** — Node-graph workflow definition (template format version 3) with triggers, steps (request, script, data-mapper, dcupl-instance, …), responses, and edges connecting them. Schemas: `WorkflowConfigV3` (the graph) and `TemplateV3` (template wrapping the graph with metadata).
 - **Script** — One `.js` function body the SDK runs inside a `Dcupl` instance, registered in `dcupl.lc.json` as `type: script` + `scriptKey` and dispatched on `script_type` (`script`, `async_script`, `sort`, `operator`, `endpoint`). `endpoint` scripts answer HTTP routes on a deployed REST API instance against a read-only `dcupl` facade. No standalone schema — the resource shape is in `AppLoaderConfiguration`; the contract is in `references/scripts.md`.
 - **REST API template** — `api/<key>.api.json` (`RestApi.Template` in `@dcupl/common-internal`; `dcupl schemas get rest-api-template --example`, dcupl/dcupl-cli#256). Describes one deployable API: `dcuplConfig` (project, key, `applicationKey`), `auth`, `vGuardEnabled`, and `endpoints[]` (`path`, `method`, `scriptKey`) served by the app runner at `instance/<key>/endpoints/<path>`. Scaffold with `dcupl generate api --name <key>`; deployed from the console's REST APIs page. See `references/scripts.md`.
 - **`dcupl app` daemon** — A local in-memory engine for ad-hoc data analysis on CSV/JSON/NDJSON. See `references/querying.md`.

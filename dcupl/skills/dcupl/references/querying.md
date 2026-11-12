@@ -372,7 +372,7 @@ The daemon wraps this into a full query group automatically.
 
 **Every condition takes `options`:** `invert` (NOT — on SDK 2.x it applies to every operator; SDK 1.x ignored it for `gt`/`lt`/`size`/`isTruthy`), `transform` (`["lowercase","trim","removeWhitespace"]`, applied to both sides) and `arrayValueHandling` (`"some"` default / `"every"`) for array values. On SDK 2.x array values include dotted paths through a multi-valued reference (`memberships.role` compares every membership's role) and answer correctly on a cold daemon; `every` needs at least one value.
 
-**Which SDK does the daemon run?** The daemon bundles its own `@dcupl/core`; check `dcupl --version` / the CLI's `package.json`. CLI 1.4.1 bundles `@dcupl/core` 2.1.0 (CLI 1.4.0 bundles 2.0.0), so every daemon from CLI 1.4.0 on has `in`, `regexFlags` and the array-value behaviour above.
+**Which SDK does the daemon run?** The daemon bundles its own `@dcupl/core`; check `dcupl --version` / the CLI's `package.json`. CLI 2.0.0 bundles `@dcupl/core` 2.1.0, so every daemon from CLI 2.0.0 on has `in`, `regexFlags` and the array-value behaviour above.
 
 **Filter for null/empty values:** `{"operator":"isTruthy","attribute":"x","value":false}` matches `null`, `undefined`, empty string, and `0` (anything JS-falsy). There is no dedicated `isNull`/`isEmpty` operator — `isTruthy:false` is the canonical pattern.
 
