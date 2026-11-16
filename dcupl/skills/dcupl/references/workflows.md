@@ -385,7 +385,7 @@ A `TemplateV3` can carry sticky notes in `ui.notes[]` (sibling of `ui.positions`
 
 ## Build → validate → test → deploy loop
 
-> **The reliable loop in practice: edit → `deploy` (to a reachable runner) → trigger via `curl`** (see "Debugging a failing run"). `dcupl workflow test` bundles deploy+trigger; `dcupl workflow run` re-triggers what is already deployed. Two gotchas: (1) `deploy` and `test` wait for the runner's hot-swap by default (`--wait`, up to `--swap-timeout` 30000 ms) and `test` only triggers once the swap is confirmed — but with `--no-wait` a trigger fired right after `deploy` can still hit the *previous* deployment, so if a fix seems ignored, drop `--no-wait` or re-trigger before concluding the code is wrong; (2) `deploy`/`test` send your local file, but they do NOT sync it to the console — run `dcupl files push` separately to keep the cloud copy current.
+> **The reliable loop in practice: edit → `dcupl workflow test` (deploy + run in one step) → read what it prints → edit again.** To vary the request body without redeploying, re-trigger the deployment with `dcupl workflow run <key> --runner <uid> --body '<json>'`. Both print the run's execution id, the per-node trace and the workflow's response body (`--json`: the trace plus a `response` field), so you don't need `curl` to see what a run answered (see "Reading a trace"). Two gotchas: (1) `deploy` and `test` wait for the runner's hot-swap by default (`--wait`, up to `--swap-timeout` 30000 ms) and `test` only triggers once the swap is confirmed — but with `--no-wait` a trigger fired right after `deploy` can still hit the *previous* deployment, so if a fix seems ignored, drop `--no-wait` or re-trigger before concluding the code is wrong; (2) `deploy`/`test` send your local file, but they do NOT sync it to the console — run `dcupl files push` separately to keep the cloud copy current.
 
 ### 1. Author the workflow file
 
@@ -432,7 +432,7 @@ Prints a table: `uid`, `runnerKey`, `type`, `url`, `health` (a live probe of the
 
 ### 5. Test — deploy to dev runner and exercise
 
-> **Deploy-to-test reality:** `dcupl workflow test` deploys the workflow to the given runner before running it. There is no local executor, no draft state, and no sandbox mode. The console-api does not proxy full execution — the full run is triggered by calling the runner URL directly. **A live runner is required.**
+> **Deploy-to-test reality:** `dcupl workflow test` deploys the workflow to the given runner before running it. There is no local executor, no draft state, and no sandbox mode. The run itself goes through the Console API, which calls the runner for you. **A live runner is required.**
 
 #### Full-run (exercise the trigger-request path):
 
@@ -440,9 +440,9 @@ Prints a table: `uid`, `runnerKey`, `type`, `url`, `health` (a live probe of the
 dcupl workflow test --file dcupl/workflows/my-workflow.workflow-v3.json --runner <devRunnerUid>
 ```
 
-This validates locally, deploys to the dev runner, then triggers the workflow via the trigger-request node's configured `path` and first `method`. The full run goes through the Console API and prints the per-node trace (console-api ≥ 1.5.15 required; dcupl/dcupl-cli#288).
+This validates locally, deploys to the dev runner, then triggers the workflow via the trigger-request node's configured `path` and first `method`. The full run goes through the Console API and prints the execution id, the per-node trace and the workflow's response body (see "Reading a trace").
 
-> ⚠️ **`test` triggers with an EMPTY request body unless you pass `--input <file>`** — for a full run, `--input` is a JSON file that becomes the request body (there is no `--query` flag). A workflow whose templates read `{{request.body.field}}` fails under a bare `test` (`Unresolved template placeholder`); pass `--input`, or use `dcupl workflow run <key> --runner <uid> --body '<json>'` / deploy + curl (see "Debugging a failing run"). Before deploying, `test` and `deploy` probe the runner's `/health` and refuse with `RUNNER_UNREACHABLE` if it is down; after the deploy, swap failures name their cause and say whether a retry helps (`--json` errors carry `retryable` and `runnerStatus`): `WORKFLOW_RUNNER_UNREACHABLE` — the runner (or its proxy) did not answer, e.g. 502/503/504; it is down, not rejecting the workflow, and the stored deployment goes live once it is back (retryable); `WORKFLOW_SWAP_REJECTED` with `retryable: true` — the runner kept answering 404 until `--swap-timeout` because its config reload did not pick the workflow up; retrying the deploy triggers another reload, and if that fails too, check the runner's logs; `WORKFLOW_SWAP_REJECTED` with `retryable: false` — the runner refused console-api's status request (401/403, usually a runner key mismatch); a retry will not help, check the runner record; `WORKFLOW_SWAP_ERROR` — the runner instance reports `status: 'error'` (not retryable); `WORKFLOW_SWAP_TIMEOUT` — the version never converged within `--swap-timeout` (retryable). Check `dcupl workflow runners list` health and `dcupl workflow status --id <uid>` (which prints console-api's unreachable/rejected reason) before retrying.
+> ⚠️ **`test` triggers with an EMPTY request body unless you pass `--input <file>`** — for a full run, `--input` is a JSON file that becomes the request body (there is no `--query` flag). A workflow whose templates read `{{request.body.field}}` fails under a bare `test` (`Unresolved template placeholder`); pass `--input`, or re-trigger with `dcupl workflow run <key> --runner <uid> --body '<json>'` (see "Re-triggering without redeploying"). Before deploying, `test` and `deploy` probe the runner's `/health` and refuse with `RUNNER_UNREACHABLE` if it is down; after the deploy, swap failures name their cause and say whether a retry helps (`--json` errors carry `retryable` and `runnerStatus`): `WORKFLOW_RUNNER_UNREACHABLE` — the runner (or its proxy) did not answer, e.g. 502/503/504; it is down, not rejecting the workflow, and the stored deployment goes live once it is back (retryable); `WORKFLOW_SWAP_REJECTED` with `retryable: true` — the runner kept answering 404 until `--swap-timeout` because its config reload did not pick the workflow up; retrying the deploy triggers another reload, and if that fails too, check the runner's logs; `WORKFLOW_SWAP_REJECTED` with `retryable: false` — the runner refused console-api's status request (401/403, usually a runner key mismatch); a retry will not help, check the runner record; `WORKFLOW_SWAP_ERROR` — the runner instance reports `status: 'error'` (not retryable); `WORKFLOW_SWAP_TIMEOUT` — the version never converged within `--swap-timeout` (retryable). Check `dcupl workflow runners list` health and `dcupl workflow status --id <uid>` (which prints console-api's unreachable/rejected reason) before retrying.
 
 #### Single-node test (exercise one node in isolation):
 
@@ -502,7 +502,7 @@ dcupl workflow undeploy --id <workflowUid> --yes
 - **Console logs** — `console.*` output from script nodes
 - **Errors** — error message + stack if the node failed
 
-Human output is one line per node — `• <nodeId> [ok|ERROR, <n>ms] → <n> item(s)`, with `log:` and `error:` lines indented under it — headed by `Execution <id> — workflow <key>`. There is no `PASS`/`FAIL` line: a run with any node error ends with `WORKFLOW_RUN_ERROR` and a non-zero exit code.
+Human output is one line per node — `• <nodeId> [ok|ERROR, <n>ms] → <n> item(s)`, with `log:` and `error:` lines indented under it — headed by `Execution <id> — workflow <key>`. A full run then prints `Response:` with the workflow's response body (the first 4000 characters; `--json` carries all of it). There is no `PASS`/`FAIL` line: a run with any node error ends with `WORKFLOW_RUN_ERROR` and a non-zero exit code.
 
 For structured output (e.g. when driving from an agent or CI script), pass `--json`:
 
@@ -510,17 +510,21 @@ For structured output (e.g. when driving from an agent or CI script), pass `--js
 dcupl workflow test --file dcupl/workflows/my-workflow.workflow-v3.json --runner <devRunnerUid> --json
 ```
 
-For a traced run the JSON result includes the full trace as a structured object — easier to parse than terminal output and unambiguous on pass/fail.
+A full run's JSON result is the trace (`executionId`, `workflowKey`, `status`, `nodes`) plus a **`response`** field holding the workflow's whole response body — what a client calling the trigger would get. Read `response` for the answer and `nodes` for how it came about; easier to parse than terminal output and unambiguous on pass/fail.
 
-> **On failure, `test`/`run` unwrap the runner's response**, most specific signal first: the per-node trace if the failure body still carries one (traced runs only); else the runner's error envelope as `✗ <message> @ nodeId: <id> [errorType: …]`; a 403 attributable to a `dcupl-files` node becomes a `WORKFLOW_FILES_AUTH` hint (check `auth.apiKey`); only when the body has nothing structured do you get the bare message plus `(HTTP <status>)`. If you do land on that bare line, use the direct-trigger technique below.
+**Warnings go to stderr**, so `--json` stdout stays one JSON value per payload: e.g. a run whose trace could not be read (it still succeeds and names the `dcupl workflow trace --id … --run …` command to retry with), `trace --last` announcing the run it picked, the ignored `--trigger-key`. Read stdout for the result and stderr for these notes; don't merge the two streams before parsing.
+
+> **On failure, `test`/`run` print the failed run first**: its execution id, the per-node trace and the runner's failure body (`--json`: a first line `{ executionId, status, nodes, error: { message, nodeId, errorType, … }, response }`, then the usual `{ success: false, error, code }`), and exit non-zero. The error line names the most specific cause: the runner's error envelope as `✗ <message> @ nodeId: <id> [errorType: …]`; a 403 attributable to a `dcupl-files` node becomes a `WORKFLOW_FILES_AUTH` hint (check `auth.apiKey`). A failure before the run started (workflow lookup, trigger auth, unreachable route) has no execution id and prints just the message, plus `(HTTP <status>)` when the body has nothing structured.
 
 ---
 
 ## Debugging a failing run
 
-**Rule zero: read the HTTP status and `history`, not just the body.** A failed run answers 500 / 504 (timeout) / 507 (memory) with `status: "failed"` — or `{ error }` from a Script Response — and `history`/`trace` record `failed` (dcupl-workflow-runner#82). A multi-write `dcupl-files` node is non-atomic: on a failure or timeout earlier writes stay committed; the node's `details.files[]` ledger (dcupl-workflow-runner#84) says which. Verify outputs with `dcupl files list`/`read`, not the run report.
+**Rule zero: read the run's status, not just the response body.** A failed run answers 500 / 504 (timeout) / 507 (memory) with `status: "failed"` — or `{ error }` from a Script Response — and `history`/`trace` record `failed` (dcupl-workflow-runner#82). A multi-write `dcupl-files` node is non-atomic: on a failure or timeout earlier writes stay committed; the node's `details.files[]` ledger (dcupl-workflow-runner#84) says which. Verify outputs with `dcupl files list`/`read`, not the run report.
 
-### The primary tools: `history` + `trace`
+**The loop:** `dcupl workflow test` (after a local edit) or `dcupl workflow run` (same deployment, other input) → read the execution id, the per-node trace and the `response` it prints → find the failing node → iterate on that node alone with `test --node` / `run --node` → full run again. Each run already prints everything `history` + `trace` would give you for it; reach for those two for runs the CLI did not start (console, schedules, clients) or when a run printed a stderr warning that its trace could not be read.
+
+### Past runs: `history` + `trace`
 
 ```bash
 dcupl workflow list                                      # deployed workflows + UIDs
@@ -529,7 +533,7 @@ dcupl workflow trace --id <workflowUid> --run <executionId> --json   # per-node:
 dcupl workflow trace --id <workflowUid> --last                       # same, for the most recent run (prints which run it picked)
 ```
 
-`trace` is the workhorse: per-node status/duration/error for **every** run (human output is a `nodeId / status / durationMs / error` table; `--json` is the full graph state). Only a traced run (see "Reading a trace" — console Test panel with **Enable Data Trace**) also carries `metadata.dataTrace`: evaluated node configs, truncated payload samples, script `console` output. The loop in practice: `deploy` → trigger via `run` or curl (below) → `history` for the run status + executionId → `trace` for the failing node. (`dcupl workflow get/template/status` exist too — see `dcupl workflow --help`.)
+`trace` gives per-node status/duration/error for **every** run (human output is a `nodeId / status / durationMs / error` table; `--json` is the full graph state). Only a traced run (see "Reading a trace" — `dcupl workflow test|run`, or the console Test panel with **Enable Data Trace**) also carries `metadata.dataTrace`: evaluated node configs, truncated payload samples, script `console` output. (`dcupl workflow get/template/status` exist too — see `dcupl workflow --help`.)
 
 ### Re-triggering without redeploying: `dcupl workflow run`
 
@@ -540,11 +544,11 @@ dcupl workflow run <key> --runner <runnerUid> --input body.json        # body fr
 dcupl workflow run <key> --runner <runnerUid> --node <nodeId> --body '{"main":[{"json":{}}]}'   # one node, payload = test-node inputData
 ```
 
-`run` never touches a local file and never redeploys: it looks the workflow up by key on that runner (`workflow list`'s deployed key or the bare template key both work), reads the trigger path/method from the deployed template, and triggers it with `dataTrace=true` through the Console API, so the run is traced (see "Reading a trace"). Use it to iterate on inputs against a deployment you've already made. Related flags on `deploy`/`test`: `--no-wait` (return without waiting for the hot-swap — reintroduces the stale-deployment race) and `--swap-timeout <ms>` (default 30000).
+`run` never touches a local file and never redeploys: it looks the workflow up by key on that runner (`workflow list`'s deployed key or the bare template key both work), reads the trigger path/method from the deployed template, and triggers it with `dataTrace=true` through the Console API, so the run is traced: it prints the execution id, the per-node trace and the response body, with `--json` the trace plus `response` (see "Reading a trace"). Use it to iterate on inputs against a deployment you've already made. Related flags on `deploy`/`test`: `--no-wait` (return without waiting for the hot-swap — reintroduces the stale-deployment race) and `--swap-timeout <ms>` (default 30000).
 
-### Triggering the runner directly (calling a deployed workflow)
+### Fallback: triggering the runner directly (calling a deployed workflow)
 
-To see the runner's **raw response** — status, headers and body, untouched by the CLI — deploy and then call the runner URL yourself. This is also how any client calls a deployed workflow:
+The CLI already shows a run's response body, so you don't need this to debug. Call the runner URL yourself only for what the CLI does not show: the raw HTTP status and headers as a client sees them, `?async=true` jobs, or a client integration you are building. This is how any client calls a deployed workflow:
 
 ```bash
 # 1. deploy to a reachable runner (a local one is ideal). deploy ships this local file;
@@ -577,7 +581,7 @@ A failed run answers 504 (timeout), 507 (memory) or 500. A graceful workflow tim
 
 ⚠️ The answer comes from the **first node in `nodes[]` that ends a branch with items** — with a response node plus another branch ending in a step, let that step `return []`, or its items may become the answer (dcupl-workflow-runner#214, open).
 
-`?async=true` answers at once with `{ jobId, status: "queued", workflowKey, statusUrl, eventsUrl, createdAt }`; poll `GET …/v3/workflow/<deployed-key>/jobs/<jobId>/status` with the same `api-key` (`status` `queued` | `running` | `completed` | `failed` | `cancelled`, `result` once completed), `DELETE …/jobs/<jobId>` cancels, `GET …/jobs/<jobId>/events` streams SSE; jobs are kept for one hour. This **deploy → curl** loop works against any runner you can reach (including a local `http://localhost:3003`).
+`?async=true` answers at once with `{ jobId, status: "queued", workflowKey, statusUrl, eventsUrl, createdAt }`; poll `GET …/v3/workflow/<deployed-key>/jobs/<jobId>/status` with the same `api-key` (`status` `queued` | `running` | `completed` | `failed` | `cancelled`, `result` once completed), `DELETE …/jobs/<jobId>` cancels, `GET …/jobs/<jobId>/events` streams SSE; jobs are kept for one hour. A direct call also reaches a runner the Console API cannot, such as a local `http://localhost:3003`: `test`/`run` go through the Console API, so they need a runner it can reach; for a local runner, deploy and then call it like this (the run is untraced, so read it with `dcupl workflow trace`).
 
 ---
 
@@ -590,7 +594,7 @@ A failed run answers 504 (timeout), 507 (memory) or 500. A graceful workflow tim
 
 Always run `dcupl workflow runners list` to confirm UIDs before running `test` or `deploy`. There is no "dry-run" or draft state — every `test` is a live deploy on that runner.
 
-This table is about *caution*, not a hard binding: `deploy` works to **any** runner, and deploying to a **dev** runner and then re-triggering it with `dcupl workflow run` or `curl` (see "Debugging a failing run") is the recommended iterate loop — it lets you vary inputs without redeploying. The rule that still holds firm: never point `test` (or a throwaway `deploy`) at a runner serving production.
+This table is about *caution*, not a hard binding: `deploy` works to **any** runner, and deploying to a **dev** runner and then re-triggering it with `dcupl workflow run` (see "Debugging a failing run") is the recommended iterate loop — it lets you vary inputs without redeploying. The rule that still holds firm: never point `test` (or a throwaway `deploy`) at a runner serving production.
 
 ---
 
