@@ -115,6 +115,23 @@ test('reads a last entry without a trailing comma and a description joined with 
   assert.equal(read.get('size'), 'array (or string) length equals value, a number.');
 });
 
+test('resolves ${NAME} in a template entry to a plain string constant of the schema (dcupl-plugins#42)', () => {
+  const source =
+    "const dateValueForms = 'dates: ISO 8601 string or epoch ms, else error';\n" +
+    schemaOf(`  eq: \`eq: attribute equals value; \${dateValueForms}.\`,
+  gt: \`gt: greater than value; \${ dateValueForms }.\``);
+  const read = parseOperatorDescriptions(source);
+  assert.equal(read.get('eq'), 'attribute equals value; dates: ISO 8601 string or epoch ms, else error.');
+  assert.equal(read.get('gt'), 'greater than value; dates: ISO 8601 string or epoch ms, else error.');
+  // A constant that is not one plain literal, or is declared twice, is refused, not guessed.
+  for (const declaration of ["const forms = 'a' + b;\n", "const forms = 'a';\nconst forms = 'b';\n"]) {
+    assert.throws(
+      () => parseOperatorDescriptions(declaration + schemaOf('  eq: `eq: equals; ${forms}.`,')),
+      /entry "eq": its value is a template with \$\{forms\}/,
+    );
+  }
+});
+
 test('fails on an entry it cannot read, naming it, instead of dropping it', () => {
   assert.throws(
     () => parseOperatorDescriptions(schemaOf("  eq: 'eq: equals.',\n  size: SIZE_DESCRIPTION,")),

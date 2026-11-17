@@ -53,7 +53,7 @@ const ESCAPES = { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v', 0: '\0' 
  * `key: 'literal' (+ 'literal')*` entries separated by commas (comments allowed) and throws on
  * anything else, so an entry is never dropped without a word.
  */
-function readRecord(source, open) {
+function readRecord(source, open, constants = new Map()) {
   let at = open + 1;
   const entries = new Map();
   const rest = () => JSON.stringify(source.slice(at, at + 40).split('\n')[0]);
@@ -102,7 +102,15 @@ function readRecord(source, open) {
         throw new Error(`entry "${key}": its string never ends`);
       }
       if (quote === '`' && source.startsWith('${', at)) {
-        throw new Error(`entry "${key}": its value is a template with \${…}, not a plain string`);
+        const slot = /^\$\{\s*([A-Za-z_$][\w$]*)\s*\}/.exec(source.slice(at));
+        if (!slot || !constants.has(slot[1])) {
+          throw new Error(
+            `entry "${key}": its value is a template with \${${slot ? slot[1] : '…'}}, which is not a plain string constant of the schema source`,
+          );
+        }
+        text += constants.get(slot[1]);
+        at += slot[0].length - 1;
+        continue;
       }
       if (source[at] === '\\') {
         at += 1;
@@ -145,6 +153,28 @@ function readRecord(source, open) {
 }
 
 const DECLARATION = /(?:const|let|var)\s+operatorDescriptions\b[^=;]*=\s*\{/;
+
+/**
+ * The top-level `const NAME = 'text';` declarations of the schema source whose value is one plain
+ * string literal without escapes, as name → text. A template entry may use them as `${NAME}`
+ * (the schema writes the date value forms once, as `dateValueForms`, dcupl-plugins#42). A name
+ * declared twice is left out, so a `${…}` on it is refused instead of guessed.
+ */
+function readConstants(source) {
+  const constants = new Map();
+  const seen = new Set();
+  const declaration = /^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)(?:\s*:\s*string)?\s*=\s*(?:'([^'\\\n]*)'|"([^"\\\n]*)")\s*;/gm;
+  for (const match of source.matchAll(declaration)) {
+    const [, name, single, double] = match;
+    if (seen.has(name)) {
+      constants.delete(name);
+      continue;
+    }
+    seen.add(name);
+    constants.set(name, single ?? double);
+  }
+  return constants;
+}
 
 /**
  * The index of the `{` that opens the `operatorDescriptions` record. The source is walked as
@@ -196,12 +226,13 @@ function findRecord(source) {
 /**
  * The `operatorDescriptions` record of the schema source as operator → semantics, in source
  * order. Each description starts with "<operator>: "; the table has the operator in its own
- * column, so the prefix is dropped. Throws when the record is missing, empty or has an entry
- * that is not a plain string.
+ * column, so the prefix is dropped. A template entry may use `${NAME}` for a top-level plain
+ * string constant of the source. Throws when the record is missing, empty or has an entry that
+ * is not a plain string.
  */
 export function parseOperatorDescriptions(source) {
   const descriptions = new Map();
-  for (const [operator, description] of readRecord(source, findRecord(source))) {
+  for (const [operator, description] of readRecord(source, findRecord(source), readConstants(source))) {
     const prefix = `${operator}: `;
     descriptions.set(operator, description.startsWith(prefix) ? description.slice(prefix.length) : description);
   }
