@@ -242,7 +242,7 @@ Each group entry comes back with an `_aggregates` array containing the requested
 ## `fn aggregate` flags
 
 - `--types distinct,count,sum,avg,min,max,group` — comma-separated. Optional when a grouping flag below is present.
-- `--bins 0-100,100-200,200-500` — the histogram tool: comma-separated numeric ranges (`from-to`) that become `group` buckets. Give both bounds and check the counts against `count`: today an open-ended `200-` or `-100` counts 0 and a value equal to a bound lands in no bin (dcupl/dcupl#511); `group` is added to `--types` for you. `--group-options '<json>'` / `--group-options-file <path>` pass a full SDK `groupOptions` object instead (mutually exclusive with `--bins`).
+- `--bins 0-100,100-200,200-500` — the histogram tool: comma-separated numeric ranges (`from-to`) that become `group` buckets. A bin holds `from <= value < to`, so a value equal to a bound lands in the higher bin; leave out one bound for an open end (`500-` = 500 and up). Negative bounds work: `-10-0,0-10`, `-20--10`, and `--10` for "up to -10". `group` is added to `--types` for you. `--group-options '<json>'` / `--group-options-file <path>` pass a full SDK `groupOptions` object instead (mutually exclusive with `--bins`).
 - `--query '<json>'` — scope the aggregation to a subset (e.g. avg price *of shoes only*).
 - `--include-keys` — when computing `distinct`, include the matching record ids per value. Default is to omit them (the SDK can be expensive on sparse columns; default-compact saves bandwidth).
 - `--distinct-limit N` — cap the number of `distinct` values returned.
