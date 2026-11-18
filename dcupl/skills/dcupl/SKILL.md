@@ -199,6 +199,8 @@ In `dcupl.lc.json`, declare each app under `applications[]` with the tags it sho
 
 `default` here has no `resourceTags` — it loads everything. Sliced apps load only resources whose `tags[]` intersects their `resourceTags[]`.
 
+`dcupl generate script` (every `--mode`), `generate operator`, `generate transformer` and `generate api` tag the resource they register with the application's `resourceTags`, so a tagged application loads it (an untagged endpoint script in a tagged app reports `EndpointScriptMissing`). For script, operator and transformer, pick the application with `--app <key>`; without it the only application in `dcupl.lc.json` is used. With several applications and no `--app` the resource keeps `tags: []` and a warning is printed; an unknown `--app` fails with `GENERATE_UNKNOWN_APP`.
+
 To spin up one slice, pass `--app-key`:
 
 ```bash
