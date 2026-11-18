@@ -132,6 +132,44 @@ test('resolves ${NAME} in a template entry to a plain string constant of the sch
   }
 });
 
+test('resolves a constant that is itself a template or a concatenation of constants', () => {
+  const source =
+    "const isoForm = 'ISO 8601 string';\n" +
+    "const epochForm: string = 'epoch ms';\n" +
+    'const dateForms = `${isoForm} or ${epochForm}`;\n' +
+    "export const dateValueForms = 'dates: ' + `${dateForms}` + ', else error';\n" +
+    schemaOf('  eq: `eq: attribute equals value; ${dateValueForms}.`,');
+  assert.equal(
+    parseOperatorDescriptions(source).get('eq'),
+    'attribute equals value; dates: ISO 8601 string or epoch ms, else error.',
+  );
+});
+
+test('refuses constants that refer to each other in a cycle, naming the chain', () => {
+  for (const declarations of ['const a = `x ${b}`;\nconst b = `y ${a}`;\n', 'const a = `x ${a}`;\n']) {
+    assert.throws(
+      () => parseOperatorDescriptions(declarations + schemaOf('  eq: `eq: equals; ${a}.`,')),
+      /entry "eq": \$\{a\} refers to itself \(a → (b → )?a\)/,
+    );
+  }
+});
+
+test('the CLI answers exit 2 naming an unresolved ${NAME}, also one inside a constant; --write writes nothing', () => {
+  const nested = 'const dateValueForms = `dates: ${isoForms}`;\n';
+  for (const [prefix, missing] of [
+    ['', 'dateValueForms'],
+    [nested, 'isoForms'],
+  ]) {
+    const source = prefix + schemaSource.replace(/eq: 'eq: [^\n]*/, 'eq: `eq: equals; ${dateValueForms}.`,');
+    for (const flags of [[], ['--write']]) {
+      const run = cli(inSync, source, ...flags);
+      assert.equal(run.status, 2, run.stderr);
+      assert.match(run.stderr, new RegExp(`entry "eq": .*\\$\\{${missing}\\}, which is not a plain string constant`));
+      assert.equal(run.after, inSync);
+    }
+  }
+});
+
 test('fails on an entry it cannot read, naming it, instead of dropping it', () => {
   assert.throws(
     () => parseOperatorDescriptions(schemaOf("  eq: 'eq: equals.',\n  size: SIZE_DESCRIPTION,")),

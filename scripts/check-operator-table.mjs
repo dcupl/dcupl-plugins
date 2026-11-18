@@ -49,32 +49,31 @@ const USAGE =
 const ESCAPES = { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v', 0: '\0' };
 
 /**
- * A reader over the text of the `operatorDescriptions` object literal. It accepts exactly
- * `key: 'literal' (+ 'literal')*` entries separated by commas (comments allowed) and throws on
- * anything else, so an entry is never dropped without a word.
+ * A scanner over the schema source from `start`. `readValue` reads one string value, `'literal'
+ * (+ 'literal')*`, where a template literal may use `${NAME}` for a string constant (resolved by
+ * `constant(name)`), and throws on anything else, so a value is never dropped or guessed.
  */
-function readRecord(source, open, constants = new Map()) {
-  let at = open + 1;
-  const entries = new Map();
-  const rest = () => JSON.stringify(source.slice(at, at + 40).split('\n')[0]);
+function scanner(source, start, constant) {
+  const scan = { at: start };
+  scan.rest = () => JSON.stringify(source.slice(scan.at, scan.at + 40).split('\n')[0]);
 
-  const skipBlank = () => {
+  scan.skipBlank = () => {
     for (;;) {
-      const blank = /^(?:\s+|\/\/[^\n]*|\/\*[\s\S]*?\*\/)/.exec(source.slice(at));
+      const blank = /^(?:\s+|\/\/[^\n]*|\/\*[\s\S]*?\*\/)/.exec(source.slice(scan.at));
       if (!blank) {
         return;
       }
-      at += blank[0].length;
+      scan.at += blank[0].length;
     }
   };
 
   /** The text of the escape whose first character (after the backslash) is at `at`; leaves `at` on its last one. */
   const readEscape = (key) => {
-    const tail = source.slice(at, at + 10);
+    const tail = source.slice(scan.at, scan.at + 10);
     const hex = /^(?:u\{([0-9a-fA-F]{1,6})\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2}))/.exec(tail);
     const code = hex ? parseInt(hex[1] ?? hex[2] ?? hex[3], 16) : undefined;
     if (hex && code <= 0x10ffff) {
-      at += hex[0].length - 1;
+      scan.at += hex[0].length - 1;
       return String.fromCodePoint(code);
     }
     // A wrong guess here would end up in the table with --write: refuse instead.
@@ -85,65 +84,81 @@ function readRecord(source, open, constants = new Map()) {
     }
     const lineBreak = /^\r?\n/.exec(tail);
     if (lineBreak) {
-      at += lineBreak[0].length - 1;
+      scan.at += lineBreak[0].length - 1;
       return '';
     }
-    return ESCAPES[source[at]] ?? source[at];
+    return ESCAPES[source[scan.at]] ?? source[scan.at];
   };
 
   const readLiteral = (key) => {
-    const quote = source[at];
-    if (!`'"\``.includes(quote) || at >= source.length) {
-      throw new Error(`entry "${key}": its value is not a string literal (or literals joined with +), at ${rest()}`);
+    const quote = source[scan.at];
+    if (!`'"\``.includes(quote) || scan.at >= source.length) {
+      throw new Error(`entry "${key}": its value is not a string literal (or literals joined with +), at ${scan.rest()}`);
     }
     let text = '';
-    for (at += 1; source[at] !== quote; at += 1) {
-      if (at >= source.length || (quote !== '`' && source[at] === '\n')) {
+    for (scan.at += 1; source[scan.at] !== quote; scan.at += 1) {
+      if (scan.at >= source.length || (quote !== '`' && source[scan.at] === '\n')) {
         throw new Error(`entry "${key}": its string never ends`);
       }
-      if (quote === '`' && source.startsWith('${', at)) {
-        const slot = /^\$\{\s*([A-Za-z_$][\w$]*)\s*\}/.exec(source.slice(at));
-        if (!slot || !constants.has(slot[1])) {
+      if (quote === '`' && source.startsWith('${', scan.at)) {
+        const slot = /^\$\{\s*([A-Za-z_$][\w$]*)\s*\}/.exec(source.slice(scan.at));
+        if (!slot) {
           throw new Error(
-            `entry "${key}": its value is a template with \${${slot ? slot[1] : '…'}}, which is not a plain string constant of the schema source`,
+            `entry "${key}": its value is a template with \${…}, which is not a plain string constant of the schema source`,
           );
         }
-        text += constants.get(slot[1]);
-        at += slot[0].length - 1;
+        text += constant(slot[1], key);
+        scan.at += slot[0].length - 1;
         continue;
       }
-      if (source[at] === '\\') {
-        at += 1;
+      if (source[scan.at] === '\\') {
+        scan.at += 1;
         text += readEscape(key);
       } else {
-        text += source[at];
+        text += source[scan.at];
       }
     }
-    at += 1;
+    scan.at += 1;
     return text;
   };
 
+  scan.readValue = (key) => {
+    let text = '';
+    do {
+      scan.skipBlank();
+      text += readLiteral(key);
+      scan.skipBlank();
+    } while (source[scan.at] === '+' && (scan.at += 1));
+    return text;
+  };
+
+  return scan;
+}
+
+/**
+ * The entries of the `operatorDescriptions` object literal opening at `open`, as key → text. It
+ * accepts exactly `key: <string value>` entries separated by commas (comments allowed) and throws
+ * on anything else, so an entry is never dropped without a word.
+ */
+function readRecord(source, open, constant) {
+  const scan = scanner(source, open + 1, constant);
+  const entries = new Map();
   for (;;) {
-    skipBlank();
-    if (source[at] === '}') {
+    scan.skipBlank();
+    if (source[scan.at] === '}') {
       return entries;
     }
-    const name = /^(?:([A-Za-z_$][\w$]*)|'([^'\\\n]*)'|"([^"\\\n]*)")\s*:/.exec(source.slice(at));
+    const name = /^(?:([A-Za-z_$][\w$]*)|'([^'\\\n]*)'|"([^"\\\n]*)")\s*:/.exec(source.slice(scan.at));
     if (!name) {
-      throw new Error(`cannot read the entry at ${rest()} of \`operatorDescriptions\``);
+      throw new Error(`cannot read the entry at ${scan.rest()} of \`operatorDescriptions\``);
     }
     const key = name[1] ?? name[2] ?? name[3];
-    at += name[0].length;
-    let description = '';
-    do {
-      skipBlank();
-      description += readLiteral(key);
-      skipBlank();
-    } while (source[at] === '+' && (at += 1));
-    if (source[at] === ',') {
-      at += 1;
-    } else if (source[at] !== '}') {
-      throw new Error(`entry "${key}": unexpected ${rest()} after its value`);
+    scan.at += name[0].length;
+    const description = scan.readValue(key);
+    if (source[scan.at] === ',') {
+      scan.at += 1;
+    } else if (source[scan.at] !== '}') {
+      throw new Error(`entry "${key}": unexpected ${scan.rest()} after its value`);
     }
     if (entries.has(key)) {
       throw new Error(`entry "${key}": listed twice in \`operatorDescriptions\``);
@@ -155,25 +170,54 @@ function readRecord(source, open, constants = new Map()) {
 const DECLARATION = /(?:const|let|var)\s+operatorDescriptions\b[^=;]*=\s*\{/;
 
 /**
- * The top-level `const NAME = 'text';` declarations of the schema source whose value is one plain
- * string literal without escapes, as name → text. A template entry may use them as `${NAME}`
- * (the schema writes the date value forms once, as `dateValueForms`, dcupl-plugins#42). A name
- * declared twice is left out, so a `${…}` on it is refused instead of guessed.
+ * A resolver for `${NAME}` in a template value: NAME is a top-level `const` of the schema source
+ * whose value is a string value itself (literals joined with +, templates using other such
+ * constants), ended by `;`. The schema writes the date value forms once, as `dateValueForms`
+ * (dcupl-plugins#42). A name declared twice, a value that is not a string, an unknown name and
+ * constants that refer to each other in a cycle are refused, naming the identifier, not guessed.
  */
-function readConstants(source) {
-  const constants = new Map();
-  const seen = new Set();
-  const declaration = /^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)(?:\s*:\s*string)?\s*=\s*(?:'([^'\\\n]*)'|"([^"\\\n]*)")\s*;/gm;
+function constantResolver(source) {
+  const declared = new Map(); // name → offset of its value, or null when declared twice
+  const declaration = /^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)(?:\s*:\s*string)?\s*=\s*/gm;
   for (const match of source.matchAll(declaration)) {
-    const [, name, single, double] = match;
-    if (seen.has(name)) {
-      constants.delete(name);
-      continue;
-    }
-    seen.add(name);
-    constants.set(name, single ?? double);
+    declared.set(match[1], declared.has(match[1]) ? null : match.index + match[0].length);
   }
-  return constants;
+  const resolved = new Map();
+  const refuse = (key, name) => {
+    const error = new Error(
+      `entry "${key}": its value is a template with \${${name}}, which is not a plain string constant of the schema source`,
+    );
+    error.named = true;
+    return error;
+  };
+  const resolve = (name, key, chain = []) => {
+    if (resolved.has(name)) {
+      return resolved.get(name);
+    }
+    if (chain.includes(name)) {
+      const error = new Error(`entry "${key}": \${${chain[0]}} refers to itself (${[...chain, name].join(' → ')})`);
+      error.named = true;
+      throw error;
+    }
+    const offset = declared.get(name);
+    if (offset == null) {
+      throw refuse(key, name);
+    }
+    let text;
+    try {
+      const scan = scanner(source, offset, (inner) => resolve(inner, key, [...chain, name]));
+      text = scan.readValue(key);
+      if (source[scan.at] !== ';') {
+        throw new Error('not a string value');
+      }
+    } catch (error) {
+      // An error about a constant further down names that one; anything else is this one's.
+      throw error.named ? error : refuse(key, name);
+    }
+    resolved.set(name, text);
+    return text;
+  };
+  return (name, key) => resolve(name, key);
 }
 
 /**
@@ -226,13 +270,13 @@ function findRecord(source) {
 /**
  * The `operatorDescriptions` record of the schema source as operator → semantics, in source
  * order. Each description starts with "<operator>: "; the table has the operator in its own
- * column, so the prefix is dropped. A template entry may use `${NAME}` for a top-level plain
- * string constant of the source. Throws when the record is missing, empty or has an entry that
- * is not a plain string.
+ * column, so the prefix is dropped. A template entry may use `${NAME}` for a top-level string
+ * constant of the source (see `constantResolver`). Throws when the record is missing, empty or
+ * has an entry that is not a plain string.
  */
 export function parseOperatorDescriptions(source) {
   const descriptions = new Map();
-  for (const [operator, description] of readRecord(source, findRecord(source), readConstants(source))) {
+  for (const [operator, description] of readRecord(source, findRecord(source), constantResolver(source))) {
     const prefix = `${operator}: `;
     descriptions.set(operator, description.startsWith(prefix) ? description.slice(prefix.length) : description);
   }
