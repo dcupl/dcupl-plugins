@@ -25,6 +25,14 @@ automatically (e.g. the `dcupl` skill triggers when you work in a dcupl repo).
 | ------ | ------- | ----------- |
 | `dcupl` | `/plugin install dcupl@dcupl-plugins` | Skills for the dcupl ecosystem — data model authoring, app-loader configs (`dcupl.lc.json`), workflow templates, querying via the `dcupl app` daemon, project scaffolding, credential config, and cloud file sync. |
 
+## Feedback
+
+Bug reports and feature requests for dcupl (the SDK, the CLI, the console,
+workflows, the docs and this plugin) go to
+[dcupl/feedback](https://github.com/dcupl/feedback/issues/new/choose). Issues
+there are public; anything private (contract, billing, a production incident,
+a security report) goes to [support@dcupl.com](mailto:support@dcupl.com).
+
 ## Managing & updating
 
 Plugins are versioned by git commit SHA (no pinned version), so **every push to
