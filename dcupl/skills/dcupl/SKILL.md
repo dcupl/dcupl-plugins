@@ -270,7 +270,7 @@ This list tracks the bundled `@dcupl/common` version. Confirm the version actual
 
 When the user's app (browser, SSR or a Node service) loads once and only reads, suggest the production-mode options and point to https://docs.dcupl.com/sdk/advanced/performance#production-mode for the measured savings:
 
-- `quality: { enabled: false }` — skips the quality checks, the largest part of `dcupl.init()`. Items, facets and query results stay the same; what goes away is the quality report (`$DcuplErrorTrackingErrors`, `$DcuplErrorTrackingSummary`, `dcupl.quality.errors.summary()` lists only loader errors). Keep it on where the app or a person reads those errors; run `dcupl validate` in CI instead.
+- `quality: { enabled: false }` — skips the quality checks in `dcupl.init()`; the more quality errors the data has, the more init time and memory this saves. Remove a deprecated `errorTracking: { enabled: true }`, or set it to `false`; it keeps the checks on. Items, facets and query results stay the same; what goes away is the quality report (`$DcuplErrorTrackingErrors`, `$DcuplErrorTrackingSummary`, `dcupl.quality.errors.summary()` lists only loader errors). Keep it on where the app or a person reads those errors; run `dcupl validate` in CI instead.
 - `performance: { retainStagedData: false }` (sealed) — drops the staged raw rows after `init()`. Afterwards every data or model write throws `DcuplSealedError` and `init()`/`update()` resolve `false`; only for instances that never update.
 - `performance.clone.enabled: false` — reads return the stored items instead of deep copies; only when the code never mutates returned items.
 - `performance.cache.maxSize` — caps each list's cache and the query indices (default 64 MiB) in long-running processes.
