@@ -242,7 +242,7 @@ Each group entry comes back with an `_aggregates` array containing the requested
 ## `fn aggregate` flags
 
 - `--types distinct,count,sum,avg,min,max,group` — comma-separated. Optional when a grouping flag below is present.
-- `--bins 0-100,100-200,200-500` — the histogram tool: comma-separated numeric ranges (`from-to`) that become `group` buckets. A bin holds `from <= value < to`, so a value equal to a bound lands in the higher bin; leave out one bound for an open end (`500-` = 500 and up). Negative bounds work: `-10-0,0-10`, `-20--10`, and `--10` for "up to -10". `group` is added to `--types` for you. `--group-options '<json>'` / `--group-options-file <path>` pass a full SDK `groupOptions` object instead (mutually exclusive with `--bins`).
+- `--bins 0-100,100-200,200-500` — the histogram tool: comma-separated numeric ranges (`from-to`) that become `group` buckets. A bin holds `from <= value < to`, so a value equal to a bound lands in the higher bin; leave out one bound for an open end (`500-` = 500 and up). Negative bounds work: `-10-0,0-10`, `-20--10`, and `--10` for "up to -10". `group` is added to `--types` for you. `--group-options '<json>'` / `--group-options-file <path>` pass a full SDK `groupOptions` object instead (mutually exclusive with `--bins`); on a `date` attribute `from` / `to` take an ISO 8601 string or epoch ms like the comparisons below (any other string is an `InvalidDateValue` error).
 - `--query '<json>'` — scope the aggregation to a subset (e.g. avg price *of shoes only*).
 - `--include-keys` — when computing `distinct`, include the matching record ids per value. Default is to omit them (the SDK can be expensive on sparse columns; default-compact saves bandwidth).
 - `--distinct-limit N` — cap the number of `distinct` values returned.
@@ -354,19 +354,19 @@ The daemon wraps this into a full query group automatically.
 <!-- operator-semantics:start (the Semantics column is the wording of `operatorDescriptions` in the shared query schema of @dcupl/common-internal; kept in sync by scripts/check-operator-table.mjs in dcupl/dcupl-plugins, not edited by hand) -->
 | Op | Semantics | Example |
 |---|---|---|
-| `eq` | attribute equals value (the whole value, no substring match). | `{"operator":"eq","attribute":"status","value":"active"}` |
-| `in` | value is an array; matches if the attribute equals any of its entries. | `{"operator":"in","attribute":"status","value":["active","paused"]}` |
+| `eq` | attribute equals value (the whole value, no substring match); dates: ISO 8601 string or epoch ms, else error. | `{"operator":"eq","attribute":"status","value":"active"}` |
+| `in` | value is an array; matches if the attribute equals any entry; dates: ISO 8601 string or epoch ms, else error. | `{"operator":"in","attribute":"status","value":["active","paused"]}` |
 | `find` | plain string = exact whole value; "/…/" = JS regex (flags via options.regexFlags); object = property match. | `{"operator":"find","attribute":"name","value":"/^Sneaker/"}` |
-| `gt` | greater than value; a number (epoch ms for date attributes), strings compare lexically. | `{"operator":"gt","attribute":"price","value":100}` |
-| `gte` | greater than or equal to value; a number (epoch ms for date attributes). | `{"operator":"gte","attribute":"price","value":100}` |
-| `lt` | less than value; a number (epoch ms for date attributes), strings compare lexically. | `{"operator":"lt","attribute":"price","value":100}` |
-| `lte` | less than or equal to value; a number (epoch ms for date attributes). | `{"operator":"lte","attribute":"price","value":100}` |
+| `gt` | greater than value; a number, strings compare lexically; dates: ISO 8601 string or epoch ms, else error. | `{"operator":"gt","attribute":"price","value":100}` |
+| `gte` | greater than or equal to value; a number; dates: ISO 8601 string or epoch ms, else error. | `{"operator":"gte","attribute":"price","value":100}` |
+| `lt` | less than value; a number, strings compare lexically; dates: ISO 8601 string or epoch ms, else error. | `{"operator":"lt","attribute":"price","value":100}` |
+| `lte` | less than or equal to value; a number; dates: ISO 8601 string or epoch ms, else error. | `{"operator":"lte","attribute":"price","value":100}` |
 | `typeof` | JS type of the attribute equals value, e.g. "string", "number", "boolean", "object". | `{"operator":"typeof","attribute":"x","value":"string"}` |
 | `isTruthy` | value true = non-empty; false = null, undefined, "" or 0 (the null/empty filter). | `{"operator":"isTruthy","attribute":"x","value":true}` |
 | `size` | array (or string) length equals value, a number. | `{"operator":"size","attribute":"tags","value":3}` |
 <!-- operator-semantics:end -->
 
-`gt`/`gte`/`lt`/`lte` compare with JS `<`/`>`: a column typed `string` compares lexically (`"9"` > `"100"`), so type it `int`/`float` first (see "numeric-types gotcha" above). A `date` attribute compares with epoch milliseconds; an ISO string matches nothing. `in` needs SDK 2.x.
+`gt`/`gte`/`lt`/`lte` compare with JS `<`/`>`: a column typed `string` compares lexically (`"9"` > `"100"`), so type it `int`/`float` first (see "numeric-types gotcha" above). On a `date` attribute, `eq`, `in` and the four comparisons take an ISO 8601 date (`"2023-01-31"`, midnight UTC), a date-time with `Z` or an offset (`"2023-01-31T12:30:00Z"`, `"2023-01-31T12:30:00+02:00"`) or epoch milliseconds as a number (`1675168200000`). An ISO date-time without a zone is read as UTC. Any other string (`"31.01.2023"`, `"2023"`, `""`, `"2023-01-31 12:30:00"` with a space) is an `InvalidDateValue` error that names the accepted forms, and one bad entry fails the whole `in` list. `find` matches a plain ISO string but never errors. Limit: a data *cell* written as a date-time without a zone (`"2023-01-31T10:00:00"`) is read as local time, so on a host outside UTC the same string in a query misses that row (dcupl/dcupl#528). `in` needs SDK 2.x.
 
 **Any-of:** `eq` with an array value compares the *whole* array, so `{"operator":"eq","attribute":"status","value":["a","b"]}` matches nothing on a string column. Use `in` (SDK 2.x), or on SDK 1.x an `or` group with one `eq` per value. `in` uses `eq`'s equality, `"options":{"invert":true}` makes it NOT IN, and an empty list matches nothing.
 
