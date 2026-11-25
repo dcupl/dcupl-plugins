@@ -432,7 +432,7 @@ For each referenced item, the result contains `{ key, _dcupl_ref_ }`:
 
 This is a great quick visual signal of which joins landed and which dangle. The `dcupl app` daemon starts with this reference metadata on; `dcupl app create --reference-metadata false` turns it off, and a reference is then a plain `{ key }`, as in the SDK's default and the MCP tools.
 
-**`true` on a reference returns the marker, not the record.** Without a projection, with `{"customerId":true}`, and with a plain array/comma projection (`--projection '["key","customerId"]'`), a referenced attribute stays the stored `{ key, _dcupl_ref_ }` (a list of them for a multi-valued reference). The remote record is not read, so its fields are **not** inlined, and a dangling key stays, marked `"miss"`. A `{ key }` there is the reference itself, not a projection that did nothing.
+**`true` on a reference returns the marker, not the record.** Without a projection, with `{"customerId":true}`, and with a plain array/comma projection (`--projection '["key","customerId"]'`), a referenced attribute stays the stored `{ key, _dcupl_ref_ }` (a list of them for a multi-valued reference). The remote record is not read, so its fields are **not** inlined, and a dangling key stays, marked `"miss"` (a plain `{ key }` while reference metadata is off). A `{ key }` or `{ key, _dcupl_ref_ }` there is the reference itself, not a projection that did nothing.
 
 **A nested-object projection inlines the remote fields.** When you project a reference attribute with a nested object selecting remote properties, `query execute` traverses the relationship and inlines those fields:
 
@@ -443,7 +443,7 @@ dcupl app query execute --model orders --query '{"operator":"eq","attribute":"or
 # → {"orderId":"<id>","customerId":{"key":"1","name":"John Doe","country":"USA"}}
 ```
 
-The two forms disagree on a dangling key. A found record comes back inlined, with **no** `_dcupl_ref_`. A key with no record stays as `{ key, _dcupl_ref_: "miss" }` while reference metadata is on (the daemon's default) and is **dropped** while it is off (the MCP tools, `--reference-metadata false`): a single-valued reference loses the attribute, a multi-valued one leaves the key out of its list. To count dangling keys, read the `true` form, not the nested one.
+The two forms differ on a found key: `true` returns the marker, the nested form the record, with **no** `_dcupl_ref_`. On a key with no record they agree while reference metadata is on (the daemon's default): both return `{ key, _dcupl_ref_: "miss" }`. While it is off (the MCP tools, `--reference-metadata false`), `true` keeps a plain `{ key }` and the nested form **drops** the key: a single-valued reference loses the attribute, a multi-valued one leaves the key out of its list. To count dangling keys, keep reference metadata on and count `"miss"` in either form. With it off nothing marks them: they are the keys the `true` form returns that the nested form leaves out.
 
 So `query execute` with a nested projection is the most direct way to inline related fields. Two notes:
 - This works on `query execute` only. **`query one` has no `--projection` flag** — passing one errors with `{"code":"UNKNOWN_OPTION"}`. Use `query execute` (with `--item-key` filtering or an `eq` on the key) if you need projection on a single record.
