@@ -430,7 +430,9 @@ For each referenced item, the result contains `{ key, _dcupl_ref_ }`:
 - `_dcupl_ref_: "miss"` — the foreign key has no matching record (dangling FK).
 - `_dcupl_ref_: "auto_hit"` — an auto-resolved / auto-created remote reference.
 
-This is a great quick visual signal of which joins landed and which dangle. By default — and with a plain array/comma projection (`--projection '["key","customerId"]'`) — a referenced attribute stays a `{ key, _dcupl_ref_ }` marker; the remote record's fields are **not** inlined.
+This is a great quick visual signal of which joins landed and which dangle. The `dcupl app` daemon starts with this reference metadata on; `dcupl app create --reference-metadata false` turns it off, and a reference is then a plain `{ key }`, as in the SDK's default and the MCP tools.
+
+**`true` on a reference returns the marker, not the record.** Without a projection, with `{"customerId":true}`, and with a plain array/comma projection (`--projection '["key","customerId"]'`), a referenced attribute stays the stored `{ key, _dcupl_ref_ }` (a list of them for a multi-valued reference). The remote record is not read, so its fields are **not** inlined, and a dangling key stays, marked `"miss"`. A `{ key }` there is the reference itself, not a projection that did nothing.
 
 **A nested-object projection inlines the remote fields.** When you project a reference attribute with a nested object selecting remote properties, `query execute` traverses the relationship and inlines those fields:
 
@@ -440,6 +442,8 @@ dcupl app query execute --model orders --query '{"operator":"eq","attribute":"or
   --projection '{"orderId":true,"customerId":{"name":true,"country":true}}' --json
 # → {"orderId":"<id>","customerId":{"key":"1","name":"John Doe","country":"USA"}}
 ```
+
+The two forms disagree on a dangling key. A found record comes back inlined, with **no** `_dcupl_ref_`. A key with no record stays as `{ key, _dcupl_ref_: "miss" }` while reference metadata is on (the daemon's default) and is **dropped** while it is off (the MCP tools, `--reference-metadata false`): a single-valued reference loses the attribute, a multi-valued one leaves the key out of its list. To count dangling keys, read the `true` form, not the nested one.
 
 So `query execute` with a nested projection is the most direct way to inline related fields. Two notes:
 - This works on `query execute` only. **`query one` has no `--projection` flag** — passing one errors with `{"code":"UNKNOWN_OPTION"}`. Use `query execute` (with `--item-key` filtering or an `eq` on the key) if you need projection on a single record.
@@ -644,7 +648,7 @@ A deployed dcupl application (an app-runner instance whose REST API template set
 - **`sort` is two parallel arrays**, `attributes` and `order`, one upper-case `ASC` or `DESC` per attribute: `--sort price:DESC,name:ASC` is `{ "attributes": ["price","name"], "order": ["DESC","ASC"] }`.
 - **`facet` and `suggest` cap with their own keys**: `options.count` on `facet` (with `options.sort: "size-desc"` for a top-N), `options.max` on `suggest` (default 20).
 - **Results are the SDK's JSON, not the CLI's compact shapes.** A `facet` entry is `{ key, value, size, resultKeys, … }`: the item count is `size` (the CLI prints it as `count`). `metadata` answers `{ key, currentSize, initialSize, attributes, views, appliedQuery }`: `currentSize` is the count under the nested `query`, `initialSize` the model's total. `pivot` answers nested `rows[].rows[]`, each with `values[]`.
-- **Keys and references.** An item `key` is a string (`"value": "42"`, not `42`). A reference comes back as `{ key }`; filter, facet, aggregate or pivot on the target's attributes with a dotted path (`vendorId.country`), inline them with a nested projection (`{ "vendorId": { "country": true } }`).
+- **Keys and references.** An item `key` is a string (`"value": "42"`, not `42`). A reference comes back as `{ key }`, also under `{ "vendorId": true }`: that is the stored reference, not the record, and a dangling key stays. Filter, facet, aggregate or pivot on the target's attributes with a dotted path (`vendorId.country`), inline them with a nested projection (`{ "vendorId": { "country": true } }`), which leaves out a key the target model does not hold.
 - **Errors name the field** (`expected one of "ASC"|"DESC" at sort.order[0]`): fix that field and call again. An empty result usually means a wrong value or case: check it with `facet` or `suggest` before reporting none.
 
 **One example per tool** (arguments only; `Product` with `name`, `category`, `price`). `models` and `guide` take no arguments.
