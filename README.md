@@ -127,9 +127,17 @@ still be named (SDK 1.x vs 2.x).
 package is `@dcupl/cli`, and the unscoped names `dcupl` and `create-dcupl` are
 not dcupl's. Without a local CLI, `npx dcupl …` downloads whatever package owns
 that name, and an agent session confirms the download without asking. So no
-file under `dcupl/skills/` runs `npx dcupl` or `npx create-dcupl` unless
-`--no --` stops the download (`npx --no -- dcupl --version`); `npx @dcupl/cli …`
-is fine.
+file under `dcupl/skills/` fetches those names, with or without a version
+(`dcupl@latest`) or quotes, through a package manager: `npx`, `npm exec`/`npm x`,
+`-p`/`--package`, `pnpx`, `bunx`/`bun x`, `pnpm dlx`, `yarn dlx`,
+`npm|pnpm|yarn|bun init|create dcupl`, `npm i`/`pnpm add`/`yarn add`/`bun add`, or
+an `npm:dcupl` specifier. It reads shell lines, `\` continuations, and commands
+written as JSON or argument arrays (an MCP server config's `"command": "npx",
+"args": [...]`, a Dockerfile `CMD [...]`). The one allowed form is npx or
+`npm exec` whose last yes-related flag stops the download (`--no`, `--no-yes`,
+`--yes=false`, for npx also `--no-install`) with `--` right after it:
+`npx --no -- dcupl --version`. Without the `--`, npm reads the command's flags as
+its own. `npx @dcupl/cli …` is fine.
 
 It needs Node 20+ and no install or network: the schema is read with `git show`
 from the `dcupl` checkout (`--dcupl-repo <dir>` / `DCUPL_REPO`, `--ref` /
