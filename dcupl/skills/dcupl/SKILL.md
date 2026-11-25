@@ -20,12 +20,14 @@ Before anything else, determine whether the current directory is a dcupl workspa
 This skill is written against the stable **`@dcupl/cli` 2.0.0** (`@dcupl/*` 2.1.0). Every recipe here needs CLI 2.0.0 or newer — `files push --concurrency`, the text-only allowlist, and the large-file upload session in `references/cloud-sync.md` among them, and the type inference in `references/querying.md` and `references/model-authoring.md` is the one of the `@dcupl/*` 2.1.0 that CLI 2.0.0 bundles (older CLIs bundle an SDK that can read `"06112"` as `6112`). A workspace often pins an older `@dcupl/cli` in `node_modules` that lags the user's global `dcupl`, and older CLIs lack newer subcommands/flags (and some pre-1.3.4 versions silently exit 0 on an unknown subcommand rather than erroring — success-looking no-ops). So check what you're actually running before relying on any recipe here:
 
 ```bash
-dcupl --version          # what's on PATH (typically the global install)
-npx dcupl --version      # what the project's node_modules resolves
+dcupl --version               # what's on PATH (typically the global install)
+npx --no -- dcupl --version   # what the project's node_modules resolves; never downloads
 ```
 
+Keep `--no --` on every `npx` of the CLI: without it, npx downloads whatever npm package is named `dcupl` when the project has no local CLI, and in a session without a terminal it does so without asking. The CLI's package is `@dcupl/cli`, not `dcupl`. An error here means the project has no local CLI.
+
 - **Both current** → either works. Prefer bare `dcupl` to keep commands short.
-- **Only the global is current** → use bare `dcupl`, NOT `npx dcupl`. The repo's `package.json` scripts (e.g. `npm run serve`) still hit the older local CLI — fine for `dcupl serve`, not for `dcupl app`.
+- **Only the global is current** → use bare `dcupl`, not the `npx` form. The repo's `package.json` scripts (e.g. `npm run serve`) still hit the older local CLI — fine for `dcupl serve`, not for `dcupl app`.
 - **Both old** → tell the user; recommend `npm i -g @dcupl/cli@latest` (or upgrading the workspace dependency) and confirm `dcupl --version` prints 2.0.0 or newer afterwards. Don't try to work around it.
 
 Unknown flags and subcommands on a current CLI fail loudly — `dcupl app query execute --queries …` returns `{"code":"UNKNOWN_OPTION", …}`, usually with a "Did you mean --query?" hint — so a mistyped flag errors rather than silently returning unfiltered data. If a command instead does nothing and exits 0, suspect an old CLI and re-check the version.
