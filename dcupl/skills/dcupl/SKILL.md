@@ -20,12 +20,14 @@ Before anything else, determine whether the current directory is a dcupl workspa
 This skill is written against the stable **`@dcupl/cli` 2.0.0** (`@dcupl/*` 2.1.0). Every recipe here needs CLI 2.0.0 or newer — `files push --concurrency`, the text-only allowlist, and the large-file upload session in `references/cloud-sync.md` among them, and the type inference in `references/querying.md` and `references/model-authoring.md` is the one of the `@dcupl/*` 2.1.0 that CLI 2.0.0 bundles (older CLIs bundle an SDK that can read `"06112"` as `6112`). A workspace often pins an older `@dcupl/cli` in `node_modules` that lags the user's global `dcupl`, and older CLIs lack newer subcommands/flags (and some pre-1.3.4 versions silently exit 0 on an unknown subcommand rather than erroring — success-looking no-ops). So check what you're actually running before relying on any recipe here:
 
 ```bash
-dcupl --version          # what's on PATH (typically the global install)
-npx dcupl --version      # what the project's node_modules resolves
+dcupl --version               # what's on PATH (typically the global install)
+npx --no -- dcupl --version   # what the project's node_modules resolves; never downloads
 ```
 
+Keep `--no --` on every `npx` of the CLI: without it, npx downloads whatever npm package is named `dcupl` when the project has no local CLI, and in a session without a terminal it does so without asking. The CLI's package is `@dcupl/cli`, not `dcupl`. An error here means the project has no local CLI.
+
 - **Both current** → either works. Prefer bare `dcupl` to keep commands short.
-- **Only the global is current** → use bare `dcupl`, NOT `npx dcupl`. The repo's `package.json` scripts (e.g. `npm run serve`) still hit the older local CLI — fine for `dcupl serve`, not for `dcupl app`.
+- **Only the global is current** → use bare `dcupl`, not the `npx` form. The repo's `package.json` scripts (e.g. `npm run serve`) still hit the older local CLI — fine for `dcupl serve`, not for `dcupl app`.
 - **Both old** → tell the user; recommend `npm i -g @dcupl/cli@latest` (or upgrading the workspace dependency) and confirm `dcupl --version` prints 2.0.0 or newer afterwards. Don't try to work around it.
 
 Unknown flags and subcommands on a current CLI fail loudly — `dcupl app query execute --queries …` returns `{"code":"UNKNOWN_OPTION", …}`, usually with a "Did you mean --query?" hint — so a mistyped flag errors rather than silently returning unfiltered data. If a command instead does nothing and exits 0, suspect an old CLI and re-check the version.
@@ -253,7 +255,7 @@ Prefer declaring `keyProperty` in **one place** — either the model or the data
 
 ### Model & data errors — `$DcuplErrorTrackingErrors`
 
-When error tracking is enabled, the internal Model `$DcuplErrorTrackingErrors` collects every error a Model or its Data may have. When diagnosing model/data problems, query this Model to see which errors are actually present rather than guessing. Each record carries `type`, `errorGroup`, `errorType`, `title`, and (where relevant) `model`, `itemKey`, `attribute`, `description`, `meta` — plus `groupTotal` / `truncated` (see the record cap below).
+While quality checks are on (`quality.enabled`, the default; `errorTracking` alone does not switch them off), the internal Model `$DcuplErrorTrackingErrors` collects every error a Model or its Data may have. When diagnosing model/data problems, query this Model to see which errors are actually present rather than guessing. Each record carries `type`, `errorGroup`, `errorType`, `title`, and (where relevant) `model`, `itemKey`, `attribute`, `description`, `meta` — plus `groupTotal` / `truncated` (see the record cap below).
 
 > ⚠️ **Record cap.** The model stores at most **1000 records per error group** (`maxErrorsPerGroup`, an OOM guard). The SDK exposes the **true totals without lifting the cap** (dcupl/dcupl#204): query the companion model `'$DcuplErrorTrackingSummary'` — one record per `(model, attribute, errorType)` group with `totalCount`, `storedCount` and `truncated` — and every stored `$DcuplErrorTrackingErrors` record carries `groupTotal` / `truncated` (facet or filter on `truncated` to spot capped groups). `dcupl validate` already does this for you — its totals and `errors.truncatedGroups` come from that summary (dcupl/dcupl-cli#209). For manual daemon queries, read totals from `dcupl app query execute --model '$DcuplErrorTrackingSummary'`, not from the error model: `query execute` and `fn facets` against `$DcuplErrorTrackingErrors` count only the stored records (44k identical errors facet as `count: 1000`). See **Validate a workspace** above for the exact commands to load a workspace and query these Models.
 
@@ -268,11 +270,31 @@ The error taxonomy lives in the SDK at `@dcupl/common` → `QualityAnalyzer` (`p
 
 This list tracks the bundled `@dcupl/common` version. Confirm the version actually resolved by the project with `dcupl version`; if it differs, re-check `quality.types.ts` in the project's `node_modules`.
 
+### SDK runtime performance — production mode
+
+When the user's app (browser, SSR or a Node service) loads once and only reads, suggest the production-mode options and point to https://docs.dcupl.com/sdk/advanced/performance#production-mode for the measured savings:
+
+- `quality: { enabled: false }` — skips the quality checks in `dcupl.init()`; the more quality errors the data has, the more init time and memory this saves. Remove a deprecated `errorTracking: { enabled: true }`, or set it to `false`; it keeps the checks on. Items, facets and query results stay the same; what goes away is the quality report (`$DcuplErrorTrackingErrors`, `$DcuplErrorTrackingSummary`, `dcupl.quality.errors.summary()` lists only loader errors). Keep it on where the app or a person reads those errors; run `dcupl validate` in CI instead.
+- `performance: { retainStagedData: false }` (sealed) — drops the staged raw rows after `init()`. Afterwards every data or model write throws `DcuplSealedError` and `init()`/`update()` resolve `false`; only for instances that never update.
+- `performance.clone.enabled: false` — reads return the stored items instead of deep copies; only when the code never mutates returned items.
+- `performance.cache.maxSize` — caps each list's cache and the query indices (default 64 MiB) in long-running processes.
+
+Ask before switching quality off: some apps show the quality report to their users.
+
 ## When to flag back to the user
 
 - The user asks you to author a workflow and the existing files are v2.
 - `dcupl schemas list` returns nothing or errors — likely the user isn't inside a project that has `@dcupl/*` installed; ask.
 - A schema referenced in the user's files isn't in `dcupl schemas list` — flag a possible version mismatch.
+
+## Bugs and feature requests — dcupl/feedback
+
+When dcupl itself gets something wrong (a CLI command, the SDK, a schema or a runner doesn't do what its `--help`, its schema or the docs at docs.dcupl.com say, and the cause is not the user's config or data), or the user needs something dcupl doesn't do yet, suggest filing it in the public repo **https://github.com/dcupl/feedback**: a [bug report](https://github.com/dcupl/feedback/issues/new?template=bug_report.yml) or a [feature request](https://github.com/dcupl/feedback/issues/new?template=feature_request.yml). Suggest searching its open issues first; a 👍 on an existing one counts.
+
+- **Offer to draft it.** A bug report asks for the area, the version (`dcupl --version`, `npm ls @dcupl/core`), what you did (the exact command), what you expected and what happened; a feature request for the area, the problem, what would help and the workaround today. Fill those from the session.
+- **The issues are public.** Leave out API keys, tokens, project IDs, customer data and file contents; reduce the case to a minimal sample.
+- **Private matters go to support@dcupl.com**, not the repo: a contract or billing question, an incident in a production project, a security report.
+- **Only for a real bug or a missing feature.** Don't add it to every turn, and not for a problem the user can fix in their own files.
 
 ## Commands to ignore
 
