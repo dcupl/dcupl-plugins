@@ -274,6 +274,15 @@ This list tracks the bundled `@dcupl/common` version. Confirm the version actual
 - `dcupl schemas list` returns nothing or errors — likely the user isn't inside a project that has `@dcupl/*` installed; ask.
 - A schema referenced in the user's files isn't in `dcupl schemas list` — flag a possible version mismatch.
 
+## Bugs and feature requests — dcupl/feedback
+
+When dcupl itself gets something wrong (a CLI command, the SDK, a schema or a runner doesn't do what its `--help`, its schema or the docs at docs.dcupl.com say, and the cause is not the user's config or data), or the user needs something dcupl doesn't do yet, suggest filing it in the public repo **https://github.com/dcupl/feedback**: a [bug report](https://github.com/dcupl/feedback/issues/new?template=bug_report.yml) or a [feature request](https://github.com/dcupl/feedback/issues/new?template=feature_request.yml). Suggest searching its open issues first; a 👍 on an existing one counts.
+
+- **Offer to draft it.** A bug report asks for the area, the version (`dcupl --version`, `npm ls @dcupl/core`), what you did (the exact command), what you expected and what happened; a feature request for the area, the problem, what would help and the workaround today. Fill those from the session.
+- **The issues are public.** Leave out API keys, tokens, project IDs, customer data and file contents; reduce the case to a minimal sample.
+- **Private matters go to support@dcupl.com**, not the repo: a contract or billing question, an incident in a production project, a security report.
+- **Only for a real bug or a missing feature.** Don't add it to every turn, and not for a problem the user can fix in their own files.
+
 ## Commands to ignore
 
 - **`dcupl test`** — removed (dcupl/dcupl-cli#288): it fails as an unknown command. Don't suggest it for anything; if the user asks, say it never ran tests and is gone.
