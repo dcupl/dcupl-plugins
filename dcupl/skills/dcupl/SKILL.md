@@ -253,7 +253,7 @@ Prefer declaring `keyProperty` in **one place** — either the model or the data
 
 ### Model & data errors — `$DcuplErrorTrackingErrors`
 
-When error tracking is enabled, the internal Model `$DcuplErrorTrackingErrors` collects every error a Model or its Data may have. When diagnosing model/data problems, query this Model to see which errors are actually present rather than guessing. Each record carries `type`, `errorGroup`, `errorType`, `title`, and (where relevant) `model`, `itemKey`, `attribute`, `description`, `meta` — plus `groupTotal` / `truncated` (see the record cap below).
+While quality checks are on (`quality.enabled`, the default; `errorTracking` alone does not switch them off), the internal Model `$DcuplErrorTrackingErrors` collects every error a Model or its Data may have. When diagnosing model/data problems, query this Model to see which errors are actually present rather than guessing. Each record carries `type`, `errorGroup`, `errorType`, `title`, and (where relevant) `model`, `itemKey`, `attribute`, `description`, `meta` — plus `groupTotal` / `truncated` (see the record cap below).
 
 > ⚠️ **Record cap.** The model stores at most **1000 records per error group** (`maxErrorsPerGroup`, an OOM guard). The SDK exposes the **true totals without lifting the cap** (dcupl/dcupl#204): query the companion model `'$DcuplErrorTrackingSummary'` — one record per `(model, attribute, errorType)` group with `totalCount`, `storedCount` and `truncated` — and every stored `$DcuplErrorTrackingErrors` record carries `groupTotal` / `truncated` (facet or filter on `truncated` to spot capped groups). `dcupl validate` already does this for you — its totals and `errors.truncatedGroups` come from that summary (dcupl/dcupl-cli#209). For manual daemon queries, read totals from `dcupl app query execute --model '$DcuplErrorTrackingSummary'`, not from the error model: `query execute` and `fn facets` against `$DcuplErrorTrackingErrors` count only the stored records (44k identical errors facet as `count: 1000`). See **Validate a workspace** above for the exact commands to load a workspace and query these Models.
 
@@ -267,6 +267,17 @@ The error taxonomy lives in the SDK at `@dcupl/common` → `QualityAnalyzer` (`p
   - types: `InvalidConfig`, `InvalidResource`
 
 This list tracks the bundled `@dcupl/common` version. Confirm the version actually resolved by the project with `dcupl version`; if it differs, re-check `quality.types.ts` in the project's `node_modules`.
+
+### SDK runtime performance — production mode
+
+When the user's app (browser, SSR or a Node service) loads once and only reads, suggest the production-mode options and point to https://docs.dcupl.com/sdk/advanced/performance#production-mode for the measured savings:
+
+- `quality: { enabled: false }` — skips the quality checks in `dcupl.init()`; the more quality errors the data has, the more init time and memory this saves. Remove a deprecated `errorTracking: { enabled: true }`, or set it to `false`; it keeps the checks on. Items, facets and query results stay the same; what goes away is the quality report (`$DcuplErrorTrackingErrors`, `$DcuplErrorTrackingSummary`, `dcupl.quality.errors.summary()` lists only loader errors). Keep it on where the app or a person reads those errors; run `dcupl validate` in CI instead.
+- `performance: { retainStagedData: false }` (sealed) — drops the staged raw rows after `init()`. Afterwards every data or model write throws `DcuplSealedError` and `init()`/`update()` resolve `false`; only for instances that never update.
+- `performance.clone.enabled: false` — reads return the stored items instead of deep copies; only when the code never mutates returned items.
+- `performance.cache.maxSize` — caps each list's cache and the query indices (default 64 MiB) in long-running processes.
+
+Ask before switching quality off: some apps show the quality report to their users.
 
 ## When to flag back to the user
 
